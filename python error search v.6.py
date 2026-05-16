@@ -45,6 +45,17 @@ e-mail:
 репліка
 """
 
+UKRAINIAN_MARKERS = {
+    'і', 'та', 'це', 'для', 'що', 'від', 'під', 'при', 'через', 'згідно', 'наявність',
+    'зручність', 'технічні', 'обслуговування', 'попередження', 'увага', 'примітка', 'модель'
+}
+RUSSIAN_MARKERS = {
+    'и', 'или', 'это', 'для', 'что', 'при', 'через', 'согласно', 'наличие',
+    'удобство', 'технические', 'обслуживание', 'внимание', 'примечание', 'модель'
+}
+UKRAINIAN_UNIQUE_CHARS = set('іїєґ')
+RUSSIAN_UNIQUE_CHARS = set('ыэёъ')
+
 
 class TextEditor(Toplevel):
     def __init__(self, parent, title, file_path, default_content):
@@ -87,7 +98,7 @@ class TextEditor(Toplevel):
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Аналізатор Перекладу Описів v11")
+        self.root.title("Аналізатор Перекладу Описів v12")
         self.root.geometry("850x600")
         self.style = ttk.Style(self.root)
         self.style.theme_use('clam')
@@ -175,13 +186,8 @@ class SpellCheckerApp:
     def detect_default_columns(self, columns):
         normalized = {col: str(col).strip().lower() for col in columns}
 
-        ru_priority = [
-            'описание;1', 'описание', 'description;1', 'description ru', 'ru', 'рус'
-        ]
-        ua_priority = [
-            'описание (ua);1', 'опис (ua);1', 'описание ua;1', 'описание (ua)',
-            'description (ua);1', 'description ua', 'ua', 'uk', 'укр'
-        ]
+        ru_priority = ['описание;1', 'описание', 'description;1', 'description ru', 'ru', 'рус']
+        ua_priority = ['описание (ua);1', 'опис (ua);1', 'описание ua;1', 'описание (ua)', 'description (ua);1', 'description ua', 'ua', 'uk', 'укр']
 
         def find_by_priority(priority_list):
             for target in priority_list:
@@ -195,7 +201,6 @@ class SpellCheckerApp:
 
         if not ru_col:
             ru_col = next((c for c in columns if any(token in normalized[c] for token in ['описание', 'description']) and '(ua)' not in normalized[c] and 'ua' not in normalized[c] and 'uk' not in normalized[c]), '')
-
         if not ua_col:
             ua_col = next((c for c in columns if any(token in normalized[c] for token in ['ua', 'uk', 'укр', '(ua)'])), '')
 
@@ -211,14 +216,11 @@ class SpellCheckerApp:
                 self.lbl_file_status.config(text=os.path.basename(path), foreground="green")
                 self.combo_ru.config(values=columns, state="readonly")
                 self.combo_ua.config(values=columns, state="readonly")
-
                 ru_col, ua_col = self.detect_default_columns(columns)
-
                 if ru_col:
                     self.combo_ru.set(ru_col)
                 if ua_col:
                     self.combo_ua.set(ua_col)
-
                 self.log_message("Файл завантажено. Можна починати перевірку.")
                 self.btn_start_analysis.config(state='normal')
             except Exception as e:
@@ -280,12 +282,10 @@ class SpellCheckerApp:
 
     def extract_error_sentence(self, text, error_word_stem):
         text_clean = self.clean_html_text(text)
-
         sentences = re.split(r'(?<=[.!?\n])\s+', text_clean)
         for s in sentences:
             if re.search(r'(?i)\b' + re.escape(error_word_stem), s):
                 return s.strip(' .-;:,\t')
-
         match = re.search(r'(.{0,50}\b' + re.escape(error_word_stem) + r'.{0,50})', text_clean, re.IGNORECASE)
         if match:
             return "..." + match.group(1).strip() + "..."
@@ -333,6 +333,29 @@ class SpellCheckerApp:
 
         return {'type': 'text', 'text': paragraph_text}
 
+    def detect_language(self, text):
+        cleaned = self.clean_html_text(text).lower()
+        if not cleaned:
+            return 'unknown'
+
+        ua_score = sum(cleaned.count(ch) for ch in UKRAINIAN_UNIQUE_CHARS)
+        ru_score = sum(cleaned.count(ch) for ch in RUSSIAN_UNIQUE_CHARS)
+
+        words = re.findall(r'[а-яіїєґёъыэ]+', cleaned, flags=re.IGNORECASE)
+        for word in words:
+            if word in UKRAINIAN_MARKERS:
+                ua_score += 2
+            if word in RUSSIAN_MARKERS:
+                ru_score += 2
+
+        if ua_score == 0 and ru_score == 0:
+            return 'unknown'
+        if ua_score > ru_score:
+            return 'ua'
+        if ru_score > ua_score:
+            return 'ru'
+        return 'unknown'
+
     def format_description(self, text, blacklist):
         source = self.normalize_text(text)
         source = unescape(source)
@@ -372,7 +395,7 @@ class SpellCheckerApp:
                 label = item['label']
                 value = item['value']
 
-                if label.lower() in ('увага', 'примітка'):
+                if label.lower() in ('увага', 'примітка', 'внимание', 'примечание'):
                     flush_list()
                     result.append(f"<p><strong>{label}:</strong> {value}</p>")
                     continue
@@ -416,11 +439,31 @@ class SpellCheckerApp:
             formatted_ru_descriptions = []
             formatted_ua_descriptions = []
             rows_with_errors = set()
+            rows_with_language_mismatch = set()
 
             for i, row in df.iterrows():
                 text_ru = self.normalize_text(row.get(col_ru, ''))
                 text_ua = self.normalize_text(row.get(col_ua, ''))
                 row_errors = []
+
+                ru_detected_lang = self.detect_language(text_ru)
+                ua_detected_lang = self.detect_language(text_ua)
+
+                if text_ru.strip() and ru_detected_lang == 'ua':
+                    row_errors.append("[МОВА] У стовпчику RU виявлено український текст. Потрібен переклад російською.")
+                    formatted_ru_text = ""
+                    rows_with_errors.add(i)
+                    rows_with_language_mismatch.add(i)
+                else:
+                    formatted_ru_text = self.format_description(text_ru, blacklist)
+
+                if text_ua.strip() and ua_detected_lang == 'ru':
+                    row_errors.append("[МОВА] У стовпчику UA виявлено російський текст. Потрібен переклад українською.")
+                    formatted_ua_text = ""
+                    rows_with_errors.add(i)
+                    rows_with_language_mismatch.add(i)
+                else:
+                    formatted_ua_text = self.format_description(text_ua, blacklist)
 
                 text_ua_lower = text_ua.lower()
                 for blacklisted_term in blacklist:
@@ -437,25 +480,18 @@ class SpellCheckerApp:
 
                 for ru_stem, ua_stems in rules.items():
                     match_ru = re.search(r'(?i)\b' + re.escape(ru_stem) + r'[\w-]*\b', text_ru)
-
                     if match_ru:
                         ru_full_word = match_ru.group(0)
-
                         for ua_stem in ua_stems:
                             if re.search(r'(?i)\b' + re.escape(ua_stem), text_ua):
                                 error_sentence = self.extract_error_sentence(text_ua, ua_stem)
-
                                 is_ignored = False
                                 for ig in ignores:
                                     if ig in error_sentence.lower():
                                         is_ignored = True
                                         break
-
                                 if not is_ignored and error_sentence:
                                     row_errors.append(f"[ПОМИЛКА] Значення '{ru_full_word}' хибно перекладено. Речення: \"{error_sentence}\"")
-
-                formatted_ru_text = self.format_description(text_ru, blacklist)
-                formatted_ua_text = self.format_description(text_ua, blacklist)
 
                 errors_column.append("\n".join(row_errors))
                 formatted_ru_descriptions.append(formatted_ru_text)
@@ -482,16 +518,20 @@ class SpellCheckerApp:
             for r in dataframe_to_rows(df, index=False, header=True):
                 ws.append(r)
 
-            fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+            yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+            red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
+
             for row_idx in rows_with_errors:
+                fill_to_use = red_fill if row_idx in rows_with_language_mismatch else yellow_fill
                 for cell in ws[row_idx + 2]:
-                    cell.fill = fill
+                    cell.fill = fill_to_use
 
             wb.save(save_path)
             self.progress_bar['value'] = total_rows
             self.lbl_progress_status.config(text="Готово!")
             self.log_message(
                 f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках. "
+                f"Мовних невідповідностей: {len(rows_with_language_mismatch)}. "
                 f"Створено колонки: '{checked_ru_col_name}' та '{checked_ua_col_name}'."
             )
             self.root.after(0, lambda: messagebox.showinfo("Успіх", f"Файл збережено:\n{save_path}"))
