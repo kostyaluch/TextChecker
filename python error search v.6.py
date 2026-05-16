@@ -55,6 +55,15 @@ RUSSIAN_MARKERS = {
 }
 UKRAINIAN_UNIQUE_CHARS = set('іїєґ')
 RUSSIAN_UNIQUE_CHARS = set('ыэёъ')
+CHINESE_CHAR_PATTERN = re.compile(r'[\u4e00-\u9fff]')
+TECHNICAL_HTML_PATTERNS = [
+    r'(?is)<style\b[^>]*>.*?</style>',
+    r'(?is)<script\b[^>]*>.*?</script>',
+    r'(?is)<div\b[^>]*class="[^"]*ssd-module-wrap[^"]*"[^>]*>.*?</div>',
+    r'(?is)<div\b[^>]*class=["\']?ssd-module[^>]*>.*?</div>',
+    r'(?is)<div\b[^>]*(cssurl|skucode|skudesign|id="zbViewModulesH"|id="zbViewModulesHeight")[^>]*>.*?</div>',
+    r'(?is)<input\b[^>]*(zbViewModulesHeight)[^>]*>',
+]
 
 
 class TextEditor(Toplevel):
@@ -98,7 +107,7 @@ class TextEditor(Toplevel):
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Аналізатор Перекладу Описів v12")
+        self.root.title("Аналізатор Перекладу Описів v13")
         self.root.geometry("850x600")
         self.style = ttk.Style(self.root)
         self.style.theme_use('clam')
@@ -185,7 +194,6 @@ class SpellCheckerApp:
 
     def detect_default_columns(self, columns):
         normalized = {col: str(col).strip().lower() for col in columns}
-
         ru_priority = ['описание;1', 'описание', 'description;1', 'description ru', 'ru', 'рус']
         ua_priority = ['описание (ua);1', 'опис (ua);1', 'описание ua;1', 'описание (ua)', 'description (ua);1', 'description ua', 'ua', 'uk', 'укр']
 
@@ -270,15 +278,43 @@ class SpellCheckerApp:
             return ""
         return str(text)
 
-    def clean_html_text(self, text):
+    def strip_technical_html(self, text):
         text = self.normalize_text(text)
         text = unescape(text)
         text = re.sub(r'\[/?html\]', '', text, flags=re.IGNORECASE)
+        for pattern in TECHNICAL_HTML_PATTERNS:
+            text = re.sub(pattern, ' ', text)
         text = re.sub(r'(?is)<!--.*?-->', ' ', text)
+        return text
+
+    def clean_html_text(self, text):
+        text = self.strip_technical_html(text)
+        text = re.sub(r'(?is)<style\b[^>]*>.*?</style>', ' ', text)
+        text = re.sub(r'(?is)<script\b[^>]*>.*?</script>', ' ', text)
         text = re.sub(r'(?i)(</li>|<br\s*/?>|</p>|</div>)', '. ', text)
         text = re.sub(r'<[^>]+>', ' ', text)
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r'http[s]?://\S+', ' ', text)
+        text = re.sub(r'\b[a-z0-9_-]+\s*\{[^{}]*\}', ' ', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s+', ' ', text).strip(' .')
         return text
+
+    def contains_chinese(self, text):
+        return bool(CHINESE_CHAR_PATTERN.search(self.normalize_text(text)))
+
+    def is_meaningful_text(self, text):
+        cleaned = self.clean_html_text(text)
+        if not cleaned:
+            return False
+        if self.contains_chinese(cleaned):
+            return False
+        words = re.findall(r'[A-Za-zА-Яа-яІіЇїЄєҐґЁёЪъЫыЭэ0-9]+', cleaned)
+        if len(words) <= 1:
+            return False
+        if len(cleaned) < 12:
+            return False
+        if 'ssd-module-wrap' in cleaned.lower() or 'background-image' in cleaned.lower():
+            return False
+        return True
 
     def extract_error_sentence(self, text, error_word_stem):
         text_clean = self.clean_html_text(text)
@@ -306,6 +342,7 @@ class SpellCheckerApp:
         paragraphs = re.findall(r'(?is)<p\b[^>]*>(.*?)</p>', source)
         normalized_paragraphs = []
         for paragraph in paragraphs:
+            paragraph = re.sub(r'(?is)<img\b[^>]*>', ' ', paragraph)
             paragraph = self.convert_markdown_bold_to_html(paragraph)
             paragraph = re.sub(r'<br\s*/?>', ' ', paragraph, flags=re.IGNORECASE)
             paragraph = re.sub(r'\s+', ' ', paragraph).strip()
@@ -337,6 +374,8 @@ class SpellCheckerApp:
         cleaned = self.clean_html_text(text).lower()
         if not cleaned:
             return 'unknown'
+        if self.contains_chinese(cleaned):
+            return 'zh'
 
         ua_score = sum(cleaned.count(ch) for ch in UKRAINIAN_UNIQUE_CHARS)
         ru_score = sum(cleaned.count(ch) for ch in RUSSIAN_UNIQUE_CHARS)
@@ -357,14 +396,10 @@ class SpellCheckerApp:
         return 'unknown'
 
     def format_description(self, text, blacklist):
-        source = self.normalize_text(text)
-        source = unescape(source)
-        source = re.sub(r'\[/?html\]', '', source, flags=re.IGNORECASE)
-        source = re.sub(r'(?is)<!--.*?-->', ' ', source)
-
+        source = self.strip_technical_html(text)
         paragraphs = self.extract_paragraphs(source)
         if not paragraphs:
-            return self.clean_html_text(source)
+            return ""
 
         result = []
         current_list_items = []
@@ -382,6 +417,8 @@ class SpellCheckerApp:
         for paragraph_html, paragraph_text in paragraphs:
             if self.sentence_contains_blacklist(paragraph_text, blacklist):
                 continue
+            if self.contains_chinese(paragraph_text):
+                continue
 
             item = self.classify_paragraph(paragraph_html, paragraph_text)
             item_type = item['type']
@@ -394,6 +431,9 @@ class SpellCheckerApp:
             if item_type in ('labeled_value', 'plain_labeled_value'):
                 label = item['label']
                 value = item['value']
+
+                if self.contains_chinese(label) or self.contains_chinese(value):
+                    continue
 
                 if label.lower() in ('увага', 'примітка', 'внимание', 'примечание'):
                     flush_list()
@@ -412,7 +452,8 @@ class SpellCheckerApp:
             result.append(f"<p>{item['text']}</p>")
 
         flush_list()
-        return '\n'.join(result).strip()
+        formatted = '\n'.join(result).strip()
+        return formatted if self.is_meaningful_text(formatted) else ""
 
     def get_unique_column_name(self, columns, base_name):
         if base_name not in columns:
@@ -449,21 +490,35 @@ class SpellCheckerApp:
                 ru_detected_lang = self.detect_language(text_ru)
                 ua_detected_lang = self.detect_language(text_ua)
 
-                if text_ru.strip() and ru_detected_lang == 'ua':
-                    row_errors.append("[МОВА] У стовпчику RU виявлено український текст. Потрібен переклад російською.")
+                if text_ru.strip() and ru_detected_lang in ('ua', 'zh'):
+                    if ru_detected_lang == 'zh':
+                        row_errors.append("[МОВА] У стовпчику RU виявлено китайський текст. Потрібен переклад російською.")
+                    else:
+                        row_errors.append("[МОВА] У стовпчику RU виявлено український текст. Потрібен переклад російською.")
                     formatted_ru_text = ""
                     rows_with_errors.add(i)
                     rows_with_language_mismatch.add(i)
                 else:
                     formatted_ru_text = self.format_description(text_ru, blacklist)
+                    if text_ru.strip() and not formatted_ru_text:
+                        row_errors.append("[КОНТЕНТ] У стовпчику RU не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
+                        rows_with_errors.add(i)
+                        rows_with_language_mismatch.add(i)
 
-                if text_ua.strip() and ua_detected_lang == 'ru':
-                    row_errors.append("[МОВА] У стовпчику UA виявлено російський текст. Потрібен переклад українською.")
+                if text_ua.strip() and ua_detected_lang in ('ru', 'zh'):
+                    if ua_detected_lang == 'zh':
+                        row_errors.append("[МОВА] У стовпчику UA виявлено китайський текст. Потрібен переклад українською.")
+                    else:
+                        row_errors.append("[МОВА] У стовпчику UA виявлено російський текст. Потрібен переклад українською.")
                     formatted_ua_text = ""
                     rows_with_errors.add(i)
                     rows_with_language_mismatch.add(i)
                 else:
                     formatted_ua_text = self.format_description(text_ua, blacklist)
+                    if text_ua.strip() and not formatted_ua_text:
+                        row_errors.append("[КОНТЕНТ] У стовпчику UA не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
+                        rows_with_errors.add(i)
+                        rows_with_language_mismatch.add(i)
 
                 text_ua_lower = text_ua.lower()
                 for blacklisted_term in blacklist:
@@ -531,7 +586,7 @@ class SpellCheckerApp:
             self.lbl_progress_status.config(text="Готово!")
             self.log_message(
                 f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках. "
-                f"Мовних невідповідностей: {len(rows_with_language_mismatch)}. "
+                f"Критичних рядків: {len(rows_with_language_mismatch)}. "
                 f"Створено колонки: '{checked_ru_col_name}' та '{checked_ua_col_name}'."
             )
             self.root.after(0, lambda: messagebox.showinfo("Успіх", f"Файл збережено:\n{save_path}"))
