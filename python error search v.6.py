@@ -3,6 +3,8 @@ from tkinter import ttk, filedialog, messagebox, Toplevel
 import pandas as pd
 import threading
 import os
+import sys
+import subprocess
 import time
 import re
 from html import unescape
@@ -13,6 +15,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 RULES_FILE = 'translation_rules.txt'
 IGNORE_FILE = 'ignore_rules.txt'
 BLACKLIST_FILE = 'blacklist_terms.txt'
+APP_VERSION = "v14"
 
 DEFAULT_RULES = """# Формат: російський_корінь = українські_корені_через_кому
 # Наприклад:
@@ -107,12 +110,17 @@ class TextEditor(Toplevel):
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Аналізатор Перекладу Описів v13")
-        self.root.geometry("850x600")
+        self.root.title(f"Аналізатор Перекладу Описів {APP_VERSION}")
+        self.root.geometry("980x700")
+        self.root.minsize(920, 640)
         self.style = ttk.Style(self.root)
         self.style.theme_use('clam')
+        self.configure_styles()
 
-        self.file_path = ""
+        self.file_paths = []
+        self.last_result_paths = []
+        self.skip_processed_var = tk.BooleanVar(value=True)
+        self.html_only_var = tk.BooleanVar(value=False)
         self.create_widgets()
 
         if not os.path.exists(RULES_FILE):
@@ -125,21 +133,35 @@ class SpellCheckerApp:
             with open(BLACKLIST_FILE, 'w', encoding='utf-8') as f:
                 f.write(DEFAULT_BLACKLIST)
 
+    def configure_styles(self):
+        self.style.configure('Title.TLabel', font=('Segoe UI', 12, 'bold'))
+        self.style.configure('TLabelframe', padding=8)
+        self.style.configure('TLabelframe.Label', font=('Segoe UI', 10, 'bold'))
+        self.style.configure('TButton', padding=(10, 6))
+        self.style.configure('TCheckbutton', padding=2)
+
     def create_widgets(self):
-        file_frame = ttk.LabelFrame(self.root, text="1. Вибір файлу та колонок", padding="10")
+        ttk.Label(self.root, text=f"Аналізатор Перекладу Описів {APP_VERSION}", style='Title.TLabel').pack(
+            anchor='w', padx=14, pady=(12, 4)
+        )
+
+        file_frame = ttk.LabelFrame(self.root, text="1. Вибір файлів та колонок")
         file_frame.pack(fill='x', padx=10, pady=5)
 
         file_select_row = ttk.Frame(file_frame)
         file_select_row.pack(fill='x', pady=5)
 
-        self.btn_select_file = ttk.Button(file_select_row, text="📂 Обрати Excel-файл", command=self.select_file)
+        self.btn_select_file = ttk.Button(file_select_row, text="📂 Обрати Excel-файли", command=self.select_files)
         self.btn_select_file.pack(side='left', padx=5)
 
-        self.lbl_file_status = ttk.Label(file_select_row, text="Файл не обрано", foreground="gray")
-        self.lbl_file_status.pack(side='left', padx=5, fill='x', expand=True)
+        self.btn_select_folder = ttk.Button(file_select_row, text="📁 Обрати папку", command=self.select_folder)
+        self.btn_select_folder.pack(side='left', padx=5)
+
+        self.lbl_file_status = ttk.Label(file_select_row, text="Файли не обрано", foreground="gray")
+        self.lbl_file_status.pack(side='left', padx=8, fill='x', expand=True)
 
         columns_row = ttk.Frame(file_frame)
-        columns_row.pack(fill='x', pady=10)
+        columns_row.pack(fill='x', pady=(8, 4))
 
         ttk.Label(columns_row, text="Стовпчик RU:", font=('Arial', 9, 'bold')).pack(side='left', padx=5)
         self.combo_ru = ttk.Combobox(columns_row, state="disabled", width=25)
@@ -149,11 +171,31 @@ class SpellCheckerApp:
         self.combo_ua = ttk.Combobox(columns_row, state="disabled", width=25)
         self.combo_ua.pack(side='left', padx=5)
 
-        control_frame = ttk.LabelFrame(self.root, text="2. Керування та Словники", padding="10")
+        options_frame = ttk.LabelFrame(self.root, text="2. Режими обробки")
+        options_frame.pack(fill='x', padx=10, pady=5)
+
+        self.chk_skip_processed = ttk.Checkbutton(
+            options_frame,
+            text="Пропускати рядки, де _checked вже заповнено",
+            variable=self.skip_processed_var
+        )
+        self.chk_skip_processed.pack(side='left', padx=5)
+
+        self.chk_html_only = ttk.Checkbutton(
+            options_frame,
+            text="Тільки очищення HTML (без перевірки правил перекладу)",
+            variable=self.html_only_var
+        )
+        self.chk_html_only.pack(side='left', padx=12)
+
+        control_frame = ttk.LabelFrame(self.root, text="3. Керування та словники")
         control_frame.pack(fill='x', padx=10, pady=5)
 
         self.btn_start_analysis = ttk.Button(control_frame, text="▶ Почати перевірку", command=self.start_analysis, state='disabled')
         self.btn_start_analysis.pack(side='left', padx=5, fill='x', expand=True)
+
+        self.btn_open_result = ttk.Button(control_frame, text="📂 Відкрити результат", command=self.open_results, state='disabled')
+        self.btn_open_result.pack(side='left', padx=5)
 
         self.btn_edit_rules = ttk.Button(control_frame, text="✎ Словник помилок", command=lambda: self.open_editor("Словник помилок", RULES_FILE, DEFAULT_RULES))
         self.btn_edit_rules.pack(side='left', padx=5)
@@ -214,35 +256,68 @@ class SpellCheckerApp:
 
         return ru_col, ua_col
 
-    def select_file(self):
-        path = filedialog.askopenfilename(title="Оберіть файл Excel", filetypes=(("Excel files", "*.xlsx"), ("All files", "*.*")))
-        if path:
-            try:
-                df_preview = pd.read_excel(path, nrows=0)
-                columns = df_preview.columns.tolist()
-                self.file_path = path
-                self.lbl_file_status.config(text=os.path.basename(path), foreground="green")
-                self.combo_ru.config(values=columns, state="readonly")
-                self.combo_ua.config(values=columns, state="readonly")
-                ru_col, ua_col = self.detect_default_columns(columns)
-                if ru_col:
-                    self.combo_ru.set(ru_col)
-                if ua_col:
-                    self.combo_ua.set(ua_col)
-                self.log_message("Файл завантажено. Можна починати перевірку.")
-                self.btn_start_analysis.config(state='normal')
-            except Exception as e:
-                messagebox.showerror("Помилка файлу", f"Не вдалося зчитати файл:\n{e}")
+    def update_file_selection(self, paths):
+        if not paths:
+            return
+        ordered_paths = list(dict.fromkeys(paths))
+        self.file_paths = ordered_paths
+        try:
+            df_preview = pd.read_excel(ordered_paths[0], nrows=0)
+            columns = df_preview.columns.tolist()
+            self.combo_ru.config(values=columns, state="readonly")
+            self.combo_ua.config(values=columns, state="readonly")
+            ru_col, ua_col = self.detect_default_columns(columns)
+            if ru_col:
+                self.combo_ru.set(ru_col)
+            if ua_col:
+                self.combo_ua.set(ua_col)
+            if len(ordered_paths) == 1:
+                self.lbl_file_status.config(text=os.path.basename(ordered_paths[0]), foreground="green")
+            else:
+                self.lbl_file_status.config(
+                    text=f"Обрано файлів: {len(ordered_paths)} (перший: {os.path.basename(ordered_paths[0])})",
+                    foreground="green"
+                )
+            self.log_message(f"Завантажено {len(ordered_paths)} файл(ів). Можна починати перевірку.")
+            self.btn_start_analysis.config(state='normal')
+        except Exception as e:
+            messagebox.showerror("Помилка файлу", f"Не вдалося зчитати файл:\n{e}")
+
+    def select_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Оберіть один або кілька файлів Excel",
+            filetypes=(("Excel files", "*.xlsx"), ("All files", "*.*"))
+        )
+        self.update_file_selection(list(paths))
+
+    def select_folder(self):
+        folder = filedialog.askdirectory(title="Оберіть папку з Excel-файлами")
+        if not folder:
+            return
+        paths = []
+        for file_name in sorted(os.listdir(folder)):
+            if file_name.lower().endswith('.xlsx') and not file_name.startswith('~$'):
+                paths.append(os.path.join(folder, file_name))
+        if not paths:
+            messagebox.showwarning("Увага", "У вибраній папці не знайдено .xlsx файлів.")
+            return
+        self.update_file_selection(paths)
 
     def set_ui_state(self, is_running):
         state = 'disabled' if is_running else 'normal'
         self.btn_select_file.config(state=state)
+        self.btn_select_folder.config(state=state)
         self.btn_edit_rules.config(state=state)
         self.btn_edit_ignores.config(state=state)
         self.btn_edit_blacklist.config(state=state)
-        self.btn_start_analysis.config(state=state)
+        start_state = state if self.file_paths else 'disabled'
+        self.btn_start_analysis.config(state=start_state)
+        self.chk_skip_processed.config(state=state)
+        self.chk_html_only.config(state=state)
         self.combo_ru.config(state="disabled" if is_running else "readonly")
         self.combo_ua.config(state="disabled" if is_running else "readonly")
+        if is_running:
+            self.btn_open_result.config(state='disabled')
 
     def parse_rules(self):
         rules = {}
@@ -276,7 +351,15 @@ class SpellCheckerApp:
     def normalize_text(self, text):
         if pd.isna(text):
             return ""
-        return str(text)
+        return self.normalize_common_text_issues(str(text))
+
+    def normalize_common_text_issues(self, text):
+        text = str(text).replace('\u00A0', ' ').replace('\u200B', '')
+        text = text.replace('“', '"').replace('”', '"').replace('„', '"')
+        text = text.replace('’', "'").replace('`', "'")
+        text = re.sub(r'(?<!\d)(\d+),(\d{1,2})(?=\D|$)', r'\1.\2', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+        return text.strip()
 
     def strip_technical_html(self, text):
         text = self.normalize_text(text)
@@ -298,6 +381,15 @@ class SpellCheckerApp:
         text = re.sub(r'\s+', ' ', text).strip(' .')
         return text
 
+    def contains_technical_html(self, text):
+        raw_text = self.normalize_text(text)
+        if not raw_text:
+            return False
+        lowered = raw_text.lower()
+        if '[html]' in lowered or 'ssd-module-wrap' in lowered:
+            return True
+        return any(re.search(pattern, raw_text) for pattern in TECHNICAL_HTML_PATTERNS)
+
     def contains_chinese(self, text):
         return bool(CHINESE_CHAR_PATTERN.search(self.normalize_text(text)))
 
@@ -315,6 +407,13 @@ class SpellCheckerApp:
         if 'ssd-module-wrap' in cleaned.lower() or 'background-image' in cleaned.lower():
             return False
         return True
+
+    def is_suspiciously_short_text(self, text):
+        cleaned = self.clean_html_text(text)
+        if not cleaned:
+            return False
+        words = re.findall(r'[A-Za-zА-Яа-яІіЇїЄєҐґЁёЪъЫыЭэ0-9]+', cleaned)
+        return len(words) <= 2 or len(cleaned) < 24
 
     def extract_error_sentence(self, text, error_word_stem):
         text_clean = self.clean_html_text(text)
@@ -346,9 +445,13 @@ class SpellCheckerApp:
             paragraph = self.convert_markdown_bold_to_html(paragraph)
             paragraph = re.sub(r'<br\s*/?>', ' ', paragraph, flags=re.IGNORECASE)
             paragraph = re.sub(r'\s+', ' ', paragraph).strip()
-            paragraph_text = unescape(re.sub(r'<[^>]+>', '', paragraph)).strip()
+            paragraph_text = self.normalize_common_text_issues(unescape(re.sub(r'<[^>]+>', '', paragraph)).strip())
             if paragraph_text:
                 normalized_paragraphs.append((paragraph, paragraph_text))
+        if not normalized_paragraphs:
+            plain_text = self.clean_html_text(source)
+            if plain_text:
+                normalized_paragraphs.append((plain_text, plain_text))
         return normalized_paragraphs
 
     def classify_paragraph(self, paragraph_html, paragraph_text):
@@ -403,16 +506,16 @@ class SpellCheckerApp:
 
         result = []
         current_list_items = []
-        current_list_labels = set()
+        current_list_signatures = set()
 
         def flush_list():
-            nonlocal current_list_items, current_list_labels
+            nonlocal current_list_items, current_list_signatures
             if current_list_items:
                 result.append('<ul>')
                 result.extend(current_list_items)
                 result.append('</ul>')
                 current_list_items = []
-                current_list_labels = set()
+                current_list_signatures = set()
 
         for paragraph_html, paragraph_text in paragraphs:
             if self.sentence_contains_blacklist(paragraph_text, blacklist):
@@ -430,7 +533,7 @@ class SpellCheckerApp:
 
             if item_type in ('labeled_value', 'plain_labeled_value'):
                 label = item['label']
-                value = item['value']
+                value = self.normalize_common_text_issues(item['value'])
 
                 if self.contains_chinese(label) or self.contains_chinese(value):
                     continue
@@ -440,20 +543,24 @@ class SpellCheckerApp:
                     result.append(f"<p><strong>{label}:</strong> {value}</p>")
                     continue
 
-                if label not in current_list_labels:
+                item_signature = f"{label.lower()}::{value.lower()}"
+                if item_signature not in current_list_signatures:
                     current_list_items.append(f"<li><strong>{label}:</strong> {value}</li>")
-                    current_list_labels.add(label)
-                else:
-                    flush_list()
-                    result.append(f"<p><strong>{label}:</strong> {value}</p>")
+                    current_list_signatures.add(item_signature)
                 continue
 
             flush_list()
-            result.append(f"<p>{item['text']}</p>")
+            result.append(f"<p>{self.normalize_common_text_issues(item['text'])}</p>")
 
         flush_list()
-        formatted = '\n'.join(result).strip()
+        formatted = self.cleanup_formatted_html('\n'.join(result).strip())
         return formatted if self.is_meaningful_text(formatted) else ""
+
+    def cleanup_formatted_html(self, html):
+        cleaned = re.sub(r'(?is)<p>\s*(?:&nbsp;|\s)*</p>', '', html)
+        cleaned = re.sub(r'(?is)<div[^>]*>\s*(?:&nbsp;|\s)*</div>', '', cleaned)
+        cleaned = re.sub(r'\n{2,}', '\n', cleaned)
+        return cleaned.strip()
 
     def get_unique_column_name(self, columns, base_name):
         if base_name not in columns:
@@ -463,76 +570,165 @@ class SpellCheckerApp:
             counter += 1
         return f"{base_name}_{counter}"
 
-    def run_analysis(self, save_path, col_ru, col_ua):
-        try:
-            self.log_message("Початок перевірки...")
-            self.lbl_progress_status.config(text="Зчитування даних...")
+    def get_existing_or_create_column(self, df, column_name):
+        if column_name not in df.columns:
+            df[column_name] = ''
+        return column_name
 
-            rules = self.parse_rules()
-            ignores = self.parse_ignores()
-            blacklist = self.parse_blacklist()
+    def resolve_columns_for_file(self, columns, preferred_ru, preferred_ua):
+        ru_col = preferred_ru if preferred_ru in columns else ''
+        ua_col = preferred_ua if preferred_ua in columns else ''
+        if not ru_col or not ua_col:
+            detected_ru, detected_ua = self.detect_default_columns(columns)
+            ru_col = ru_col or detected_ru
+            ua_col = ua_col or detected_ua
+        if not ru_col or not ua_col:
+            raise ValueError("Не вдалося автоматично визначити колонки RU/UA у файлі.")
+        return ru_col, ua_col
 
-            df = pd.read_excel(self.file_path)
-            total_rows = len(df)
-            self.progress_bar.config(maximum=total_rows, value=0)
+    def compose_status(self, statuses):
+        ordered = []
+        for status in statuses:
+            if status and status not in ordered:
+                ordered.append(status)
+        return " | ".join(ordered) if ordered else "OK"
 
-            errors_column = []
-            formatted_ru_descriptions = []
-            formatted_ua_descriptions = []
-            rows_with_errors = set()
-            rows_with_language_mismatch = set()
+    def build_summary_text(self, summaries):
+        total_files = len(summaries)
+        totals = {
+            'total_rows': 0,
+            'processed_rows': 0,
+            'rows_with_errors': 0,
+            'need_translation': 0,
+            'technical_html': 0,
+            'blacklist': 0,
+            'chinese': 0,
+            'short': 0,
+            'skipped': 0,
+            'ok_rows': 0
+        }
+        for stats in summaries:
+            for key in totals:
+                totals[key] += stats.get(key, 0)
+        return (
+            f"Оброблено файлів: {total_files}\n"
+            f"Усього рядків: {totals['total_rows']}\n"
+            f"Опрацьовано рядків: {totals['processed_rows']}\n"
+            f"Рядків з помилками: {totals['rows_with_errors']}\n"
+            f"Потрібен переклад: {totals['need_translation']}\n"
+            f"Технічний HTML: {totals['technical_html']}\n"
+            f"Заборонений термін: {totals['blacklist']}\n"
+            f"Китайський текст: {totals['chinese']}\n"
+            f"Підозріло короткий опис: {totals['short']}\n"
+            f"Пропущено (вже оброблено): {totals['skipped']}\n"
+            f"OK: {totals['ok_rows']}"
+        )
 
-            for i, row in df.iterrows():
-                text_ru = self.normalize_text(row.get(col_ru, ''))
-                text_ua = self.normalize_text(row.get(col_ua, ''))
-                row_errors = []
+    def process_single_file(self, file_path, preferred_ru, preferred_ua, rules, ignores, blacklist, html_only_mode, skip_processed):
+        self.log_message(f"Обробка файлу: {os.path.basename(file_path)}")
+        df = pd.read_excel(file_path)
+        total_rows = len(df)
+        self.progress_bar.config(maximum=max(total_rows, 1), value=0)
 
-                ru_detected_lang = self.detect_language(text_ru)
-                ua_detected_lang = self.detect_language(text_ua)
+        col_ru, col_ua = self.resolve_columns_for_file(df.columns, preferred_ru, preferred_ua)
+        errors_col_name = self.get_existing_or_create_column(df, 'Помилки перекладу')
+        status_col_name = self.get_existing_or_create_column(df, 'Статус')
+        checked_ru_col_name = self.get_existing_or_create_column(df, f'{col_ru}_checked')
+        checked_ua_col_name = self.get_existing_or_create_column(df, f'{col_ua}_checked')
 
-                if text_ru.strip() and ru_detected_lang in ('ua', 'zh'):
-                    if ru_detected_lang == 'zh':
-                        row_errors.append("[МОВА] У стовпчику RU виявлено китайський текст. Потрібен переклад російською.")
-                    else:
-                        row_errors.append("[МОВА] У стовпчику RU виявлено український текст. Потрібен переклад російською.")
-                    formatted_ru_text = ""
-                    rows_with_errors.add(i)
-                    rows_with_language_mismatch.add(i)
+        rows_with_errors = set()
+        rows_with_language_mismatch = set()
+        rows_need_translation = set()
+        rows_with_technical_html = set()
+        rows_with_blacklist = set()
+        rows_with_chinese = set()
+        rows_with_short_desc = set()
+        rows_skipped = set()
+        rows_ok = set()
+
+        for i, row in df.iterrows():
+            text_ru = self.normalize_text(row.get(col_ru, ''))
+            text_ua = self.normalize_text(row.get(col_ua, ''))
+            row_errors = []
+            row_statuses = []
+
+            existing_ru_checked = self.normalize_text(row.get(checked_ru_col_name, ''))
+            existing_ua_checked = self.normalize_text(row.get(checked_ua_col_name, ''))
+            if skip_processed and (existing_ru_checked.strip() or existing_ua_checked.strip()):
+                rows_skipped.add(i)
+                df.at[i, status_col_name] = "Пропущено (вже оброблено)"
+                continue
+
+            ru_detected_lang = self.detect_language(text_ru)
+            ua_detected_lang = self.detect_language(text_ua)
+            ru_has_technical = self.contains_technical_html(text_ru)
+            ua_has_technical = self.contains_technical_html(text_ua)
+            ru_has_chinese = self.contains_chinese(text_ru)
+            ua_has_chinese = self.contains_chinese(text_ua)
+
+            if ru_has_technical or ua_has_technical:
+                row_statuses.append("Технічний HTML")
+                rows_with_technical_html.add(i)
+            if ru_has_chinese or ua_has_chinese:
+                row_statuses.append("Китайський текст")
+                rows_with_chinese.add(i)
+
+            if text_ru.strip() and ru_detected_lang in ('ua', 'zh') and not html_only_mode:
+                if ru_detected_lang == 'zh':
+                    row_errors.append("[МОВА] У стовпчику RU виявлено китайський текст. Потрібен переклад російською.")
                 else:
-                    formatted_ru_text = self.format_description(text_ru, blacklist)
-                    if text_ru.strip() and not formatted_ru_text:
-                        row_errors.append("[КОНТЕНТ] У стовпчику RU не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
-                        rows_with_errors.add(i)
-                        rows_with_language_mismatch.add(i)
-
-                if text_ua.strip() and ua_detected_lang in ('ru', 'zh'):
-                    if ua_detected_lang == 'zh':
-                        row_errors.append("[МОВА] У стовпчику UA виявлено китайський текст. Потрібен переклад українською.")
-                    else:
-                        row_errors.append("[МОВА] У стовпчику UA виявлено російський текст. Потрібен переклад українською.")
-                    formatted_ua_text = ""
+                    row_errors.append("[МОВА] У стовпчику RU виявлено український текст. Потрібен переклад російською.")
+                formatted_ru_text = ""
+                row_statuses.append("Потрібен переклад")
+                rows_need_translation.add(i)
+                rows_with_errors.add(i)
+                rows_with_language_mismatch.add(i)
+            else:
+                formatted_ru_text = self.format_description(text_ru, blacklist)
+                if text_ru.strip() and not formatted_ru_text:
+                    row_errors.append("[КОНТЕНТ] У стовпчику RU не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
                     rows_with_errors.add(i)
-                    rows_with_language_mismatch.add(i)
+                if text_ru.strip() and self.is_suspiciously_short_text(text_ru):
+                    row_statuses.append("Підозріло короткий опис")
+                    rows_with_short_desc.add(i)
+
+            if text_ua.strip() and ua_detected_lang in ('ru', 'zh') and not html_only_mode:
+                if ua_detected_lang == 'zh':
+                    row_errors.append("[МОВА] У стовпчику UA виявлено китайський текст. Потрібен переклад українською.")
                 else:
-                    formatted_ua_text = self.format_description(text_ua, blacklist)
-                    if text_ua.strip() and not formatted_ua_text:
-                        row_errors.append("[КОНТЕНТ] У стовпчику UA не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
-                        rows_with_errors.add(i)
-                        rows_with_language_mismatch.add(i)
+                    row_errors.append("[МОВА] У стовпчику UA виявлено російський текст. Потрібен переклад українською.")
+                formatted_ua_text = ""
+                row_statuses.append("Потрібен переклад")
+                rows_need_translation.add(i)
+                rows_with_errors.add(i)
+                rows_with_language_mismatch.add(i)
+            else:
+                formatted_ua_text = self.format_description(text_ua, blacklist)
+                if text_ua.strip() and not formatted_ua_text:
+                    row_errors.append("[КОНТЕНТ] У стовпчику UA не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
+                    rows_with_errors.add(i)
+                if text_ua.strip() and self.is_suspiciously_short_text(text_ua):
+                    row_statuses.append("Підозріло короткий опис")
+                    rows_with_short_desc.add(i)
 
-                text_ua_lower = text_ua.lower()
-                for blacklisted_term in blacklist:
-                    if blacklisted_term in text_ua_lower:
-                        idx = text_ua_lower.find(blacklisted_term)
-                        start = max(0, idx - 30)
-                        end = min(len(text_ua), idx + len(blacklisted_term) + 30)
-                        context = text_ua[start:end].strip()
-                        if start > 0:
-                            context = "..." + context
-                        if end < len(text_ua):
-                            context = context + "..."
-                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\"")
+            text_ua_lower = text_ua.lower()
+            for blacklisted_term in blacklist:
+                if blacklisted_term in text_ua_lower:
+                    idx = text_ua_lower.find(blacklisted_term)
+                    start = max(0, idx - 30)
+                    end = min(len(text_ua), idx + len(blacklisted_term) + 30)
+                    context = text_ua[start:end].strip()
+                    if start > 0:
+                        context = "..." + context
+                    if end < len(text_ua):
+                        context = context + "..."
+                    row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\"")
+                    row_statuses.append("Заборонений термін")
+                    rows_with_blacklist.add(i)
+                    rows_with_errors.add(i)
+                    break
 
+            if not html_only_mode:
                 for ru_stem, ua_stems in rules.items():
                     match_ru = re.search(r'(?i)\b' + re.escape(ru_stem) + r'[\w-]*\b', text_ru)
                     if match_ru:
@@ -547,49 +743,99 @@ class SpellCheckerApp:
                                         break
                                 if not is_ignored and error_sentence:
                                     row_errors.append(f"[ПОМИЛКА] Значення '{ru_full_word}' хибно перекладено. Речення: \"{error_sentence}\"")
+                                    rows_with_errors.add(i)
 
-                errors_column.append("\n".join(row_errors))
-                formatted_ru_descriptions.append(formatted_ru_text)
-                formatted_ua_descriptions.append(formatted_ua_text)
+            df.at[i, errors_col_name] = "\n".join(row_errors)
+            df.at[i, checked_ru_col_name] = formatted_ru_text
+            df.at[i, checked_ua_col_name] = formatted_ua_text
+            if row_statuses:
+                df.at[i, status_col_name] = self.compose_status(row_statuses)
+            elif row_errors:
+                df.at[i, status_col_name] = "Потрібен переклад"
+            else:
+                df.at[i, status_col_name] = "OK"
+                rows_ok.add(i)
 
-                if row_errors:
-                    rows_with_errors.add(i)
+            if i % 10 == 0:
+                self.progress_bar['value'] = i + 1
+                self.lbl_progress_status.config(text=f"{os.path.basename(file_path)}: {i + 1}/{total_rows}")
 
-                if i % 10 == 0:
-                    self.progress_bar['value'] = i + 1
-                    self.lbl_progress_status.config(text=f"Обробка: {i + 1}/{total_rows}")
+        save_base, ext = os.path.splitext(file_path)
+        save_path = f"{save_base}_checked{ext}"
 
-            errors_col_name = self.get_unique_column_name(df.columns, 'Помилки перекладу')
-            checked_ru_col_name = self.get_unique_column_name(df.columns, f'{col_ru}_checked')
-            checked_ua_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_checked')
+        self.lbl_progress_status.config(text=f"Збереження: {os.path.basename(save_path)}")
+        wb = Workbook()
+        ws = wb.active
+        for r in dataframe_to_rows(df, index=False, header=True):
+            ws.append(r)
 
-            df[errors_col_name] = errors_column
-            df[checked_ru_col_name] = formatted_ru_descriptions
-            df[checked_ua_col_name] = formatted_ua_descriptions
+        yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+        red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
 
-            self.lbl_progress_status.config(text="Збереження файлу...")
-            wb = Workbook()
-            ws = wb.active
-            for r in dataframe_to_rows(df, index=False, header=True):
-                ws.append(r)
+        for row_idx in rows_with_errors:
+            fill_to_use = red_fill if row_idx in rows_with_language_mismatch else yellow_fill
+            for cell in ws[row_idx + 2]:
+                cell.fill = fill_to_use
 
-            yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
-            red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
+        wb.save(save_path)
+        self.progress_bar['value'] = total_rows
 
-            for row_idx in rows_with_errors:
-                fill_to_use = red_fill if row_idx in rows_with_language_mismatch else yellow_fill
-                for cell in ws[row_idx + 2]:
-                    cell.fill = fill_to_use
+        stats = {
+            'file_path': file_path,
+            'save_path': save_path,
+            'total_rows': total_rows,
+            'processed_rows': total_rows - len(rows_skipped),
+            'rows_with_errors': len(rows_with_errors),
+            'need_translation': len(rows_need_translation),
+            'technical_html': len(rows_with_technical_html),
+            'blacklist': len(rows_with_blacklist),
+            'chinese': len(rows_with_chinese),
+            'short': len(rows_with_short_desc),
+            'skipped': len(rows_skipped),
+            'ok_rows': len(rows_ok)
+        }
+        self.log_message(
+            f"Готово: {os.path.basename(file_path)} | рядків: {total_rows}, "
+            f"помилки: {stats['rows_with_errors']}, пропущено: {stats['skipped']}, OK: {stats['ok_rows']}"
+        )
+        return stats
 
-            wb.save(save_path)
-            self.progress_bar['value'] = total_rows
+    def run_analysis(self, preferred_ru, preferred_ua):
+        try:
+            self.log_message("Початок перевірки...")
+            self.lbl_progress_status.config(text="Зчитування даних...")
+
+            rules = self.parse_rules()
+            ignores = self.parse_ignores()
+            blacklist = self.parse_blacklist()
+            html_only_mode = self.html_only_var.get()
+            skip_processed = self.skip_processed_var.get()
+            summaries = []
+            result_paths = []
+
+            for file_idx, file_path in enumerate(self.file_paths, start=1):
+                self.lbl_progress_status.config(
+                    text=f"Файл {file_idx}/{len(self.file_paths)}: {os.path.basename(file_path)}"
+                )
+                file_stats = self.process_single_file(
+                    file_path=file_path,
+                    preferred_ru=preferred_ru,
+                    preferred_ua=preferred_ua,
+                    rules=rules,
+                    ignores=ignores,
+                    blacklist=blacklist,
+                    html_only_mode=html_only_mode,
+                    skip_processed=skip_processed
+                )
+                summaries.append(file_stats)
+                result_paths.append(file_stats['save_path'])
+
+            self.last_result_paths = result_paths
+            self.root.after(0, lambda: self.btn_open_result.config(state='normal' if self.last_result_paths else 'disabled'))
+            summary_text = self.build_summary_text(summaries)
             self.lbl_progress_status.config(text="Готово!")
-            self.log_message(
-                f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках. "
-                f"Критичних рядків: {len(rows_with_language_mismatch)}. "
-                f"Створено колонки: '{checked_ru_col_name}' та '{checked_ua_col_name}'."
-            )
-            self.root.after(0, lambda: messagebox.showinfo("Успіх", f"Файл збережено:\n{save_path}"))
+            self.log_message("Підсумок:\n" + summary_text.replace('\n', ' | '))
+            self.root.after(0, lambda: messagebox.showinfo("Підсумок перевірки", summary_text))
 
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Помилка", str(e)))
@@ -599,13 +845,38 @@ class SpellCheckerApp:
     def start_analysis(self):
         col_ru = self.combo_ru.get()
         col_ua = self.combo_ua.get()
+        if not self.file_paths:
+            messagebox.showwarning("Увага", "Оберіть хоча б один Excel-файл або папку з файлами.")
+            return
         if not col_ru or not col_ua:
-            messagebox.showwarning("Увага", "Оберіть стовпчики для обох мов!")
+            messagebox.showwarning("Увага", "Оберіть стовпчики RU та UA (або дозвольте автопідбір).")
             return
         self.set_ui_state(True)
-        base, ext = os.path.splitext(self.file_path)
-        save_path = f"{base}_checked{ext}"
-        threading.Thread(target=self.run_analysis, args=(save_path, col_ru, col_ua), daemon=True).start()
+        self.log_message(
+            f"Режим: {'тільки очищення HTML' if self.html_only_var.get() else 'повна перевірка'}; "
+            f"пропуск оброблених: {'так' if self.skip_processed_var.get() else 'ні'}."
+        )
+        threading.Thread(target=self.run_analysis, args=(col_ru, col_ua), daemon=True).start()
+
+    def open_results(self):
+        if not self.last_result_paths:
+            messagebox.showwarning("Увага", "Ще немає результатів для відкриття.")
+            return
+
+        target_path = self.last_result_paths[0]
+        if len(self.last_result_paths) > 1:
+            target_path = os.path.dirname(target_path)
+
+        try:
+            if sys.platform.startswith('win'):
+                os.startfile(target_path)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', target_path])
+            else:
+                subprocess.Popen(['xdg-open', target_path])
+            self.log_message(f"Відкрито: {target_path}")
+        except Exception as e:
+            messagebox.showerror("Помилка", f"Не вдалося відкрити результат:\n{e}")
 
 
 if __name__ == "__main__":
