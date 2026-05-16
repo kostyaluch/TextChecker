@@ -331,14 +331,6 @@ class SpellCheckerApp:
 
         return '\n'.join(result).strip()
 
-    def remove_blacklisted_sentences(self, text, blacklist):
-        text = self.clean_html_text(text)
-        if not text:
-            return ""
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        kept = [s.strip() for s in sentences if s.strip() and not self.sentence_contains_blacklist(s, blacklist)]
-        return ' '.join(kept).strip()
-
     def get_unique_column_name(self, columns, base_name):
         if base_name not in columns:
             return base_name
@@ -361,7 +353,6 @@ class SpellCheckerApp:
             self.progress_bar.config(maximum=total_rows, value=0)
 
             errors_column = []
-            cleaned_descriptions = []
             formatted_descriptions = []
             rows_with_errors = set()
 
@@ -402,11 +393,9 @@ class SpellCheckerApp:
                                 if not is_ignored and error_sentence:
                                     row_errors.append(f"[ПОМИЛКА] Значення '{ru_full_word}' хибно перекладено. Речення: \"{error_sentence}\"")
 
-                cleaned_text = self.remove_blacklisted_sentences(text_ua, blacklist)
                 formatted_text = self.format_description(text_ua, blacklist)
 
                 errors_column.append("\n".join(row_errors))
-                cleaned_descriptions.append(cleaned_text)
                 formatted_descriptions.append(formatted_text)
 
                 if row_errors:
@@ -418,11 +407,9 @@ class SpellCheckerApp:
 
             errors_col_name = self.get_unique_column_name(df.columns, 'Помилки перекладу')
             checked_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_checked')
-            formatted_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_formatted_checked')
 
             df[errors_col_name] = errors_column
-            df[checked_col_name] = cleaned_descriptions
-            df[formatted_col_name] = formatted_descriptions
+            df[checked_col_name] = formatted_descriptions
 
             self.lbl_progress_status.config(text="Збереження файлу...")
             wb = Workbook()
@@ -440,7 +427,7 @@ class SpellCheckerApp:
             self.lbl_progress_status.config(text="Готово!")
             self.log_message(
                 f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках. "
-                f"Створено колонки: '{checked_col_name}' та '{formatted_col_name}'."
+                f"Створено колонку: '{checked_col_name}'."
             )
             self.root.after(0, lambda: messagebox.showinfo("Успіх", f"Файл збережено:\n{save_path}"))
 
