@@ -87,7 +87,7 @@ class TextEditor(Toplevel):
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Аналізатор Перекладу Описів v9")
+        self.root.title("Аналізатор Перекладу Описів v10")
         self.root.geometry("850x600")
         self.style = ttk.Style(self.root)
         self.style.theme_use('clam')
@@ -172,6 +172,35 @@ class SpellCheckerApp:
         self.root.wait_window(editor)
         self.log_message(f"Файл '{title}' оновлено.")
 
+    def detect_default_columns(self, columns):
+        normalized = {col: str(col).strip().lower() for col in columns}
+
+        ru_priority = [
+            'описание;1', 'описание', 'description;1', 'description ru', 'ru', 'рус'
+        ]
+        ua_priority = [
+            'описание (ua);1', 'опис (ua);1', 'описание ua;1', 'описание (ua)',
+            'description (ua);1', 'description ua', 'ua', 'uk', 'укр'
+        ]
+
+        def find_by_priority(priority_list):
+            for target in priority_list:
+                for original, lowered in normalized.items():
+                    if lowered == target:
+                        return original
+            return ''
+
+        ru_col = find_by_priority(ru_priority)
+        ua_col = find_by_priority(ua_priority)
+
+        if not ru_col:
+            ru_col = next((c for c in columns if any(token in normalized[c] for token in ['описание', 'description']) and '(ua)' not in normalized[c] and 'ua' not in normalized[c] and 'uk' not in normalized[c]), '')
+
+        if not ua_col:
+            ua_col = next((c for c in columns if any(token in normalized[c] for token in ['ua', 'uk', 'укр', '(ua)'])), '')
+
+        return ru_col, ua_col
+
     def select_file(self):
         path = filedialog.askopenfilename(title="Оберіть файл Excel", filetypes=(("Excel files", "*.xlsx"), ("All files", "*.*")))
         if path:
@@ -182,12 +211,14 @@ class SpellCheckerApp:
                 self.lbl_file_status.config(text=os.path.basename(path), foreground="green")
                 self.combo_ru.config(values=columns, state="readonly")
                 self.combo_ua.config(values=columns, state="readonly")
-                ru_col = next((c for c in columns if 'ru' in c.lower() or 'рус' in c.lower()), '')
-                ua_col = next((c for c in columns if 'ua' in c.lower() or 'uk' in c.lower() or 'укр' in c.lower()), '')
+
+                ru_col, ua_col = self.detect_default_columns(columns)
+
                 if ru_col:
                     self.combo_ru.set(ru_col)
                 if ua_col:
                     self.combo_ua.set(ua_col)
+
                 self.log_message("Файл завантажено. Можна починати перевірку.")
                 self.btn_start_analysis.config(state='normal')
             except Exception as e:
@@ -353,7 +384,8 @@ class SpellCheckerApp:
             self.progress_bar.config(maximum=total_rows, value=0)
 
             errors_column = []
-            formatted_descriptions = []
+            formatted_ru_descriptions = []
+            formatted_ua_descriptions = []
             rows_with_errors = set()
 
             for i, row in df.iterrows():
@@ -393,10 +425,12 @@ class SpellCheckerApp:
                                 if not is_ignored and error_sentence:
                                     row_errors.append(f"[ПОМИЛКА] Значення '{ru_full_word}' хибно перекладено. Речення: \"{error_sentence}\"")
 
-                formatted_text = self.format_description(text_ua, blacklist)
+                formatted_ru_text = self.format_description(text_ru, blacklist)
+                formatted_ua_text = self.format_description(text_ua, blacklist)
 
                 errors_column.append("\n".join(row_errors))
-                formatted_descriptions.append(formatted_text)
+                formatted_ru_descriptions.append(formatted_ru_text)
+                formatted_ua_descriptions.append(formatted_ua_text)
 
                 if row_errors:
                     rows_with_errors.add(i)
@@ -406,10 +440,12 @@ class SpellCheckerApp:
                     self.lbl_progress_status.config(text=f"Обробка: {i + 1}/{total_rows}")
 
             errors_col_name = self.get_unique_column_name(df.columns, 'Помилки перекладу')
-            checked_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_checked')
+            checked_ru_col_name = self.get_unique_column_name(df.columns, f'{col_ru}_checked')
+            checked_ua_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_checked')
 
             df[errors_col_name] = errors_column
-            df[checked_col_name] = formatted_descriptions
+            df[checked_ru_col_name] = formatted_ru_descriptions
+            df[checked_ua_col_name] = formatted_ua_descriptions
 
             self.lbl_progress_status.config(text="Збереження файлу...")
             wb = Workbook()
@@ -427,7 +463,7 @@ class SpellCheckerApp:
             self.lbl_progress_status.config(text="Готово!")
             self.log_message(
                 f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках. "
-                f"Створено колонку: '{checked_col_name}'."
+                f"Створено колонки: '{checked_ru_col_name}' та '{checked_ua_col_name}'."
             )
             self.root.after(0, lambda: messagebox.showinfo("Успіх", f"Файл збережено:\n{save_path}"))
 
