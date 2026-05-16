@@ -5,6 +5,7 @@ import threading
 import os
 import time
 import re
+from html import unescape
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -34,6 +35,7 @@ DEFAULT_IGNORES = """# Додайте сюди фрази (українсько�
 
 DEFAULT_BLACKLIST = """# Додайте сюди слова та фрази (будь-якою мовою), які є ПІДОЗРІЛИМИ або ЗАБОРОНЕНІ.
 # Якщо програма знайде цю фразу в українському описі, вона позначить рядок як помилковий.
+# Також програма автоматично видалить речення або пункт списку, де знайдено заборонений термін.
 # Кожна фраза з нового рядка:
 www.
 http://
@@ -43,6 +45,7 @@ e-mail:
 репліка
 """
 
+
 class TextEditor(Toplevel):
     def __init__(self, parent, title, file_path, default_content):
         super().__init__(parent)
@@ -51,30 +54,26 @@ class TextEditor(Toplevel):
         self.title(title)
         self.geometry("650x450")
         self.file_path = file_path
-        
+
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill='both', expand=True)
 
-        # ФІКС: Спочатку розміщуємо панель з кнопками внизу
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill='x', side='bottom', pady=(10, 0))
 
         self.btn_save = ttk.Button(btn_frame, text="Зберегти", command=self.save_and_close)
         self.btn_save.pack(side='right', padx=10)
-        
+
         self.btn_cancel = ttk.Button(btn_frame, text="Скасувати", command=self.destroy)
         self.btn_cancel.pack(side='right')
 
-        # ФІКС: Тепер розміщуємо текстове поле, воно займе лише місце, що залишилося
         self.txt_content = tk.Text(main_frame, wrap='word', font=('Consolas', 11))
         self.txt_content.pack(fill='both', expand=True, side='top')
-        
-        # Створюємо файл, якщо його не існує
+
         if not os.path.exists(file_path):
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(default_content)
-                
-        # Завантажуємо текст
+
         with open(file_path, 'r', encoding='utf-8') as f:
             self.txt_content.insert('1.0', f.read())
 
@@ -88,7 +87,7 @@ class TextEditor(Toplevel):
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Аналізатор Перекладу Описів v8")
+        self.root.title("Аналізатор Перекладу Описів v9")
         self.root.geometry("850x600")
         self.style = ttk.Style(self.root)
         self.style.theme_use('clam')
@@ -96,13 +95,15 @@ class SpellCheckerApp:
         self.file_path = ""
         self.create_widgets()
 
-        # Ініціалізуємо файли при старті
         if not os.path.exists(RULES_FILE):
-            with open(RULES_FILE, 'w', encoding='utf-8') as f: f.write(DEFAULT_RULES)
+            with open(RULES_FILE, 'w', encoding='utf-8') as f:
+                f.write(DEFAULT_RULES)
         if not os.path.exists(IGNORE_FILE):
-            with open(IGNORE_FILE, 'w', encoding='utf-8') as f: f.write(DEFAULT_IGNORES)
+            with open(IGNORE_FILE, 'w', encoding='utf-8') as f:
+                f.write(DEFAULT_IGNORES)
         if not os.path.exists(BLACKLIST_FILE):
-            with open(BLACKLIST_FILE, 'w', encoding='utf-8') as f: f.write(DEFAULT_BLACKLIST)
+            with open(BLACKLIST_FILE, 'w', encoding='utf-8') as f:
+                f.write(DEFAULT_BLACKLIST)
 
     def create_widgets(self):
         file_frame = ttk.LabelFrame(self.root, text="1. Вибір файлу та колонок", padding="10")
@@ -110,7 +111,7 @@ class SpellCheckerApp:
 
         file_select_row = ttk.Frame(file_frame)
         file_select_row.pack(fill='x', pady=5)
-        
+
         self.btn_select_file = ttk.Button(file_select_row, text="📂 Обрати Excel-файл", command=self.select_file)
         self.btn_select_file.pack(side='left', padx=5)
 
@@ -154,7 +155,7 @@ class SpellCheckerApp:
 
         self.txt_log = tk.Text(self.root, height=10, state='disabled', wrap='word', bg="#f0f0f0", font=('Consolas', 9))
         self.txt_log.pack(fill='both', expand=True, padx=10, pady=10)
-        
+
         log_scroll = ttk.Scrollbar(self.txt_log, orient='vertical', command=self.txt_log.yview)
         self.txt_log['yscrollcommand'] = log_scroll.set
         log_scroll.pack(side='right', fill='y')
@@ -183,8 +184,10 @@ class SpellCheckerApp:
                 self.combo_ua.config(values=columns, state="readonly")
                 ru_col = next((c for c in columns if 'ru' in c.lower() or 'рус' in c.lower()), '')
                 ua_col = next((c for c in columns if 'ua' in c.lower() or 'uk' in c.lower() or 'укр' in c.lower()), '')
-                if ru_col: self.combo_ru.set(ru_col)
-                if ua_col: self.combo_ua.set(ua_col)
+                if ru_col:
+                    self.combo_ru.set(ru_col)
+                if ua_col:
+                    self.combo_ua.set(ua_col)
                 self.log_message("Файл завантажено. Можна починати перевірку.")
                 self.btn_start_analysis.config(state='normal')
             except Exception as e:
@@ -229,49 +232,147 @@ class SpellCheckerApp:
                     blacklist.append(line.lower())
         return blacklist
 
+    def normalize_text(self, text):
+        if pd.isna(text):
+            return ""
+        return str(text)
+
+    def clean_html_text(self, text):
+        text = self.normalize_text(text)
+        text = unescape(text)
+        text = re.sub(r'\[/?html\]', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'(?is)<!--.*?-->', ' ', text)
+        text = re.sub(r'(?i)(</li>|<br\s*/?>|</p>|</div>)', '. ', text)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
     def extract_error_sentence(self, text, error_word_stem):
-        text_clean = re.sub(r'(?i)(</li>|<br\s*/?>|</p>|</div>)', '. ', text)
-        text_clean = re.sub(r'<[^>]+>', ' ', text_clean)
-        text_clean = re.sub(r'\s+', ' ', text_clean).strip()
-        
+        text_clean = self.clean_html_text(text)
+
         sentences = re.split(r'(?<=[.!?\n])\s+', text_clean)
         for s in sentences:
-            # Додано \b для точного пошуку початку слова
             if re.search(r'(?i)\b' + re.escape(error_word_stem), s):
                 return s.strip(' .-;:,\t')
-                
-        # Додано \b у резервний пошук
+
         match = re.search(r'(.{0,50}\b' + re.escape(error_word_stem) + r'.{0,50})', text_clean, re.IGNORECASE)
         if match:
             return "..." + match.group(1).strip() + "..."
         return ""
 
+    def sentence_contains_blacklist(self, sentence, blacklist):
+        sentence_lower = sentence.lower()
+        return any(term in sentence_lower for term in blacklist)
+
+    def convert_markdown_bold_to_html(self, text):
+        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+        return text
+
+    def format_description(self, text, blacklist):
+        source = self.normalize_text(text)
+        source = unescape(source)
+        source = re.sub(r'\[/?html\]', '', source, flags=re.IGNORECASE)
+        source = re.sub(r'(?is)<!--.*?-->', ' ', source)
+
+        paragraphs = re.findall(r'(?is)<p\b[^>]*>(.*?)</p>', source)
+        if not paragraphs:
+            plain = self.clean_html_text(source)
+            return plain
+
+        cleaned_paragraphs = []
+        for paragraph in paragraphs:
+            paragraph = self.convert_markdown_bold_to_html(paragraph)
+            paragraph = re.sub(r'<br\s*/?>', ' ', paragraph, flags=re.IGNORECASE)
+            paragraph = re.sub(r'\s+', ' ', paragraph)
+            paragraph = paragraph.strip()
+            paragraph_text = re.sub(r'<[^>]+>', '', paragraph).strip()
+            paragraph_text = unescape(paragraph_text)
+            if not paragraph_text or self.sentence_contains_blacklist(paragraph_text, blacklist):
+                continue
+            cleaned_paragraphs.append((paragraph, paragraph_text))
+
+        if not cleaned_paragraphs:
+            return ""
+
+        result = []
+        list_items = []
+        first_heading_used = False
+        attention_item = None
+
+        for paragraph_html, paragraph_text in cleaned_paragraphs:
+            strong_match = re.match(r'^<strong>(.+?):</strong>\s*(.*)$', paragraph_html, flags=re.IGNORECASE | re.DOTALL)
+            if strong_match:
+                label = strong_match.group(1).strip()
+                value = strong_match.group(2).strip()
+
+                if not first_heading_used and not value:
+                    result.append(f'<p><strong>{label}:</strong></p>')
+                    first_heading_used = True
+                    continue
+
+                if label.lower() == 'увага':
+                    attention_item = f'<p><strong>{label}:</strong> {value}</p>' if value else f'<p><strong>{label}:</strong></p>'
+                    continue
+
+                if value:
+                    list_items.append(f'<li><strong>{label}:</strong> {value}</li>')
+                else:
+                    result.append(f'<p><strong>{label}:</strong></p>')
+            else:
+                result.append(f'<p>{paragraph_text}</p>')
+
+        if list_items:
+            result.append('<ul>')
+            result.extend(list_items)
+            result.append('</ul>')
+
+        if attention_item:
+            result.append(attention_item)
+
+        return '\n'.join(result).strip()
+
+    def remove_blacklisted_sentences(self, text, blacklist):
+        text = self.clean_html_text(text)
+        if not text:
+            return ""
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        kept = [s.strip() for s in sentences if s.strip() and not self.sentence_contains_blacklist(s, blacklist)]
+        return ' '.join(kept).strip()
+
+    def get_unique_column_name(self, columns, base_name):
+        if base_name not in columns:
+            return base_name
+        counter = 2
+        while f"{base_name}_{counter}" in columns:
+            counter += 1
+        return f"{base_name}_{counter}"
+
     def run_analysis(self, save_path, col_ru, col_ua):
         try:
             self.log_message("Початок перевірки...")
             self.lbl_progress_status.config(text="Зчитування даних...")
-            
+
             rules = self.parse_rules()
             ignores = self.parse_ignores()
             blacklist = self.parse_blacklist()
-            
+
             df = pd.read_excel(self.file_path)
             total_rows = len(df)
             self.progress_bar.config(maximum=total_rows, value=0)
-            
+
             errors_column = []
+            cleaned_descriptions = []
+            formatted_descriptions = []
             rows_with_errors = set()
 
             for i, row in df.iterrows():
-                text_ru = str(row.get(col_ru, ''))
-                text_ua = str(row.get(col_ua, ''))
+                text_ru = self.normalize_text(row.get(col_ru, ''))
+                text_ua = self.normalize_text(row.get(col_ua, ''))
                 row_errors = []
 
-                # Перевірка чорного списку термінів
                 text_ua_lower = text_ua.lower()
                 for blacklisted_term in blacklist:
                     if blacklisted_term in text_ua_lower:
-                        # Знайти контекст терміну для відображення
                         idx = text_ua_lower.find(blacklisted_term)
                         start = max(0, idx - 30)
                         end = min(len(text_ua), idx + len(blacklisted_term) + 30)
@@ -283,36 +384,46 @@ class SpellCheckerApp:
                         row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\"")
 
                 for ru_stem, ua_stems in rules.items():
-                    # ВИПРАВЛЕНО: тепер шукає тільки з початку слова (\b), щоб уникнути "фо-ток-ореспондент"
                     match_ru = re.search(r'(?i)\b' + re.escape(ru_stem) + r'[\w-]*\b', text_ru)
-                    
+
                     if match_ru:
                         ru_full_word = match_ru.group(0)
-                        
+
                         for ua_stem in ua_stems:
-                            # ВИПРАВЛЕНО: додано \b для українського слова
                             if re.search(r'(?i)\b' + re.escape(ua_stem), text_ua):
                                 error_sentence = self.extract_error_sentence(text_ua, ua_stem)
-                                
+
                                 is_ignored = False
                                 for ig in ignores:
                                     if ig in error_sentence.lower():
                                         is_ignored = True
                                         break
-                                
+
                                 if not is_ignored and error_sentence:
                                     row_errors.append(f"[ПОМИЛКА] Значення '{ru_full_word}' хибно перекладено. Речення: \"{error_sentence}\"")
 
+                cleaned_text = self.remove_blacklisted_sentences(text_ua, blacklist)
+                formatted_text = self.format_description(text_ua, blacklist)
+
                 errors_column.append("\n".join(row_errors))
+                cleaned_descriptions.append(cleaned_text)
+                formatted_descriptions.append(formatted_text)
+
                 if row_errors:
                     rows_with_errors.add(i)
 
                 if i % 10 == 0:
                     self.progress_bar['value'] = i + 1
-                    self.lbl_progress_status.config(text=f"Обробка: {i+1}/{total_rows}")
+                    self.lbl_progress_status.config(text=f"Обробка: {i + 1}/{total_rows}")
 
-            df['Помилки перекладу'] = errors_column
-            
+            errors_col_name = self.get_unique_column_name(df.columns, 'Помилки перекладу')
+            checked_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_checked')
+            formatted_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_formatted_checked')
+
+            df[errors_col_name] = errors_column
+            df[checked_col_name] = cleaned_descriptions
+            df[formatted_col_name] = formatted_descriptions
+
             self.lbl_progress_status.config(text="Збереження файлу...")
             wb = Workbook()
             ws = wb.active
@@ -321,13 +432,16 @@ class SpellCheckerApp:
 
             fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
             for row_idx in rows_with_errors:
-                for cell in ws[row_idx + 2]:  
+                for cell in ws[row_idx + 2]:
                     cell.fill = fill
 
             wb.save(save_path)
             self.progress_bar['value'] = total_rows
             self.lbl_progress_status.config(text="Готово!")
-            self.log_message(f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках.")
+            self.log_message(
+                f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках. "
+                f"Створено колонки: '{checked_col_name}' та '{formatted_col_name}'."
+            )
             self.root.after(0, lambda: messagebox.showinfo("Успіх", f"Файл збережено:\n{save_path}"))
 
         except Exception as e:
@@ -345,6 +459,7 @@ class SpellCheckerApp:
         base, ext = os.path.splitext(self.file_path)
         save_path = f"{base}_checked{ext}"
         threading.Thread(target=self.run_analysis, args=(save_path, col_ru, col_ua), daemon=True).start()
+
 
 if __name__ == "__main__":
     main_root = tk.Tk()
