@@ -87,7 +87,7 @@ class TextEditor(Toplevel):
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Аналізатор Перекладу Описів v10")
+        self.root.title("Аналізатор Перекладу Описів v11")
         self.root.geometry("850x600")
         self.style = ttk.Style(self.root)
         self.style.theme_use('clam')
@@ -296,8 +296,42 @@ class SpellCheckerApp:
         return any(term in sentence_lower for term in blacklist)
 
     def convert_markdown_bold_to_html(self, text):
-        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-        return text
+        return re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+
+    def normalize_label(self, label):
+        label = re.sub(r'\s+', ' ', label).strip()
+        return label[:-1].strip() if label.endswith(':') else label
+
+    def extract_paragraphs(self, source):
+        paragraphs = re.findall(r'(?is)<p\b[^>]*>(.*?)</p>', source)
+        normalized_paragraphs = []
+        for paragraph in paragraphs:
+            paragraph = self.convert_markdown_bold_to_html(paragraph)
+            paragraph = re.sub(r'<br\s*/?>', ' ', paragraph, flags=re.IGNORECASE)
+            paragraph = re.sub(r'\s+', ' ', paragraph).strip()
+            paragraph_text = unescape(re.sub(r'<[^>]+>', '', paragraph)).strip()
+            if paragraph_text:
+                normalized_paragraphs.append((paragraph, paragraph_text))
+        return normalized_paragraphs
+
+    def classify_paragraph(self, paragraph_html, paragraph_text):
+        strong_match = re.match(r'^<strong>(.+?)</strong>\s*(.*)$', paragraph_html, flags=re.IGNORECASE | re.DOTALL)
+        if strong_match:
+            raw_label = strong_match.group(1).strip()
+            value = strong_match.group(2).strip()
+            label = self.normalize_label(raw_label)
+            if value:
+                return {'type': 'labeled_value', 'label': label, 'value': value, 'text': paragraph_text}
+            return {'type': 'heading', 'label': label, 'text': paragraph_text}
+
+        colon_match = re.match(r'^([^:]{1,80}):\s*(.+)$', paragraph_text)
+        if colon_match:
+            label = self.normalize_label(colon_match.group(1))
+            value = colon_match.group(2).strip()
+            if label and value:
+                return {'type': 'plain_labeled_value', 'label': label, 'value': value, 'text': paragraph_text}
+
+        return {'type': 'text', 'text': paragraph_text}
 
     def format_description(self, text, blacklist):
         source = self.normalize_text(text)
@@ -305,61 +339,56 @@ class SpellCheckerApp:
         source = re.sub(r'\[/?html\]', '', source, flags=re.IGNORECASE)
         source = re.sub(r'(?is)<!--.*?-->', ' ', source)
 
-        paragraphs = re.findall(r'(?is)<p\b[^>]*>(.*?)</p>', source)
+        paragraphs = self.extract_paragraphs(source)
         if not paragraphs:
-            plain = self.clean_html_text(source)
-            return plain
-
-        cleaned_paragraphs = []
-        for paragraph in paragraphs:
-            paragraph = self.convert_markdown_bold_to_html(paragraph)
-            paragraph = re.sub(r'<br\s*/?>', ' ', paragraph, flags=re.IGNORECASE)
-            paragraph = re.sub(r'\s+', ' ', paragraph)
-            paragraph = paragraph.strip()
-            paragraph_text = re.sub(r'<[^>]+>', '', paragraph).strip()
-            paragraph_text = unescape(paragraph_text)
-            if not paragraph_text or self.sentence_contains_blacklist(paragraph_text, blacklist):
-                continue
-            cleaned_paragraphs.append((paragraph, paragraph_text))
-
-        if not cleaned_paragraphs:
-            return ""
+            return self.clean_html_text(source)
 
         result = []
-        list_items = []
-        first_heading_used = False
-        attention_item = None
+        current_list_items = []
+        current_list_labels = set()
 
-        for paragraph_html, paragraph_text in cleaned_paragraphs:
-            strong_match = re.match(r'^<strong>(.+?):</strong>\s*(.*)$', paragraph_html, flags=re.IGNORECASE | re.DOTALL)
-            if strong_match:
-                label = strong_match.group(1).strip()
-                value = strong_match.group(2).strip()
+        def flush_list():
+            nonlocal current_list_items, current_list_labels
+            if current_list_items:
+                result.append('<ul>')
+                result.extend(current_list_items)
+                result.append('</ul>')
+                current_list_items = []
+                current_list_labels = set()
 
-                if not first_heading_used and not value:
-                    result.append(f'<p><strong>{label}:</strong></p>')
-                    first_heading_used = True
+        for paragraph_html, paragraph_text in paragraphs:
+            if self.sentence_contains_blacklist(paragraph_text, blacklist):
+                continue
+
+            item = self.classify_paragraph(paragraph_html, paragraph_text)
+            item_type = item['type']
+
+            if item_type == 'heading':
+                flush_list()
+                result.append(f"<p><strong>{item['label']}:</strong></p>")
+                continue
+
+            if item_type in ('labeled_value', 'plain_labeled_value'):
+                label = item['label']
+                value = item['value']
+
+                if label.lower() in ('увага', 'примітка'):
+                    flush_list()
+                    result.append(f"<p><strong>{label}:</strong> {value}</p>")
                     continue
 
-                if label.lower() == 'увага':
-                    attention_item = f'<p><strong>{label}:</strong> {value}</p>' if value else f'<p><strong>{label}:</strong></p>'
-                    continue
-
-                if value:
-                    list_items.append(f'<li><strong>{label}:</strong> {value}</li>')
+                if label not in current_list_labels:
+                    current_list_items.append(f"<li><strong>{label}:</strong> {value}</li>")
+                    current_list_labels.add(label)
                 else:
-                    result.append(f'<p><strong>{label}:</strong></p>')
-            else:
-                result.append(f'<p>{paragraph_text}</p>')
+                    flush_list()
+                    result.append(f"<p><strong>{label}:</strong> {value}</p>")
+                continue
 
-        if list_items:
-            result.append('<ul>')
-            result.extend(list_items)
-            result.append('</ul>')
+            flush_list()
+            result.append(f"<p>{item['text']}</p>")
 
-        if attention_item:
-            result.append(attention_item)
-
+        flush_list()
         return '\n'.join(result).strip()
 
     def get_unique_column_name(self, columns, base_name):
