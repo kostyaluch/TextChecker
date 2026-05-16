@@ -16,6 +16,11 @@ RULES_FILE = 'translation_rules.txt'
 IGNORE_FILE = 'ignore_rules.txt'
 BLACKLIST_FILE = 'blacklist_terms.txt'
 APP_VERSION = "v14"
+MIN_SHORT_DESC_WORDS = 2
+MIN_SHORT_DESC_LENGTH = 24
+DECIMAL_MAX_INT_DIGITS = 4
+DECIMAL_MAX_FRACTION_DIGITS = 2
+DECIMAL_CONTEXT_UNITS = r'%|°|кг|г|мг|л|мл|см|мм|м|дюйм|kg|g|mg|l|ml|cm|mm|m|inch|in|x|×'
 
 DEFAULT_RULES = """# Формат: російський_корінь = українські_корені_через_кому
 # Наприклад:
@@ -296,7 +301,11 @@ class SpellCheckerApp:
             return
         paths = []
         for file_name in sorted(os.listdir(folder)):
-            if file_name.lower().endswith('.xlsx') and not file_name.startswith('~$'):
+            if (
+                file_name.lower().endswith('.xlsx')
+                and not file_name.startswith('~$')
+                and not file_name.startswith('.~lock.')
+            ):
                 paths.append(os.path.join(folder, file_name))
         if not paths:
             messagebox.showwarning("Увага", "У вибраній папці не знайдено .xlsx файлів.")
@@ -357,7 +366,13 @@ class SpellCheckerApp:
         text = str(text).replace('\u00A0', ' ').replace('\u200B', '')
         text = text.replace('“', '"').replace('”', '"').replace('„', '"')
         text = text.replace('’', "'").replace('`', "'")
-        text = re.sub(r'(?<!\d)(\d+),(\d{1,2})(?=\D|$)', r'\1.\2', text)
+        # Convert decimal commas to dots only in likely measurement/value contexts.
+        text = re.sub(
+            rf'(?<!\d)(\d{{1,{DECIMAL_MAX_INT_DIGITS}}}),(\d{{1,{DECIMAL_MAX_FRACTION_DIGITS}}})(?=\s*(?:{DECIMAL_CONTEXT_UNITS}|$|[)\].,;:!?]))',
+            r'\1.\2',
+            text,
+            flags=re.IGNORECASE
+        )
         text = re.sub(r'[ \t]+', ' ', text)
         return text.strip()
 
@@ -412,8 +427,8 @@ class SpellCheckerApp:
         cleaned = self.clean_html_text(text)
         if not cleaned:
             return False
-        words = re.findall(r'[A-Za-zА-Яа-яІіЇїЄєҐґЁёЪъЫыЭэ0-9]+', cleaned)
-        return len(words) <= 2 or len(cleaned) < 24
+        words = re.findall(r'[A-Za-zА-Яа-яІіЇїЄєҐґЁёЪъЫыЭэ]+', cleaned)
+        return len(words) <= MIN_SHORT_DESC_WORDS or len(cleaned) < MIN_SHORT_DESC_LENGTH
 
     def extract_error_sentence(self, text, error_word_stem):
         text_clean = self.clean_html_text(text)
@@ -449,6 +464,7 @@ class SpellCheckerApp:
             if paragraph_text:
                 normalized_paragraphs.append((paragraph, paragraph_text))
         if not normalized_paragraphs:
+            # Fallback for plain-text inputs without <p> tags.
             plain_text = self.clean_html_text(source)
             if plain_text:
                 normalized_paragraphs.append((plain_text, plain_text))
@@ -543,7 +559,8 @@ class SpellCheckerApp:
                     result.append(f"<p><strong>{label}:</strong> {value}</p>")
                     continue
 
-                item_signature = f"{label.lower()}::{value.lower()}"
+                # Exact-match deduplication (label + value) to avoid dropping similar-but-different items.
+                item_signature = (label, value)
                 if item_signature not in current_list_signatures:
                     current_list_items.append(f"<li><strong>{label}:</strong> {value}</li>")
                     current_list_signatures.add(item_signature)
@@ -654,6 +671,7 @@ class SpellCheckerApp:
 
             existing_ru_checked = self.normalize_text(row.get(checked_ru_col_name, ''))
             existing_ua_checked = self.normalize_text(row.get(checked_ua_col_name, ''))
+            # Skip when at least one checked field is already populated to avoid accidental overwrite.
             if skip_processed and (existing_ru_checked.strip() or existing_ua_checked.strip()):
                 rows_skipped.add(i)
                 df.at[i, status_col_name] = "Пропущено (вже оброблено)"
@@ -876,7 +894,11 @@ class SpellCheckerApp:
                 subprocess.Popen(['xdg-open', target_path])
             self.log_message(f"Відкрито: {target_path}")
         except Exception as e:
-            messagebox.showerror("Помилка", f"Не вдалося відкрити результат:\n{e}")
+            messagebox.showerror(
+                "Помилка",
+                f"Не вдалося відкрити результат ({type(e).__name__}):\n{e}\n"
+                f"Спробуйте відкрити файл/папку вручну: {target_path}"
+            )
 
 
 if __name__ == "__main__":
