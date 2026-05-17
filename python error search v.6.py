@@ -15,6 +15,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 RULES_FILE = 'translation_rules.txt'
 IGNORE_FILE = 'ignore_rules.txt'
 BLACKLIST_FILE = 'blacklist_terms.txt'
+APP_NAME = "TextChecker"
 APP_VERSION = "v14"
 MIN_SHORT_DESC_WORDS = 2
 MIN_SHORT_DESC_LENGTH = 24
@@ -112,10 +113,10 @@ class TextEditor(Toplevel):
         self.destroy()
 
 
-class SpellCheckerApp:
+class TextCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"Аналізатор Перекладу Описів {APP_VERSION}")
+        self.root.title(f"{APP_NAME} {APP_VERSION}")
         self.root.geometry("980x700")
         self.root.minsize(920, 640)
         self.style = ttk.Style(self.root)
@@ -146,7 +147,7 @@ class SpellCheckerApp:
         self.style.configure('TCheckbutton', padding=2)
 
     def create_widgets(self):
-        ttk.Label(self.root, text=f"Аналізатор Перекладу Описів {APP_VERSION}", style='Title.TLabel').pack(
+        ttk.Label(self.root, text=f"{APP_NAME} {APP_VERSION}", style='Title.TLabel').pack(
             anchor='w', padx=14, pady=(12, 4)
         )
 
@@ -704,7 +705,7 @@ class SpellCheckerApp:
             else:
                 formatted_ru_text = self.format_description(text_ru, blacklist)
                 if text_ru.strip() and not formatted_ru_text:
-                    row_errors.append("[КОНТЕНТ] У стовпчику RU не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
+                    row_errors.append("[КОНТЕНТ] У стовпчику RU не виявлено придатного текстового опису або знайдено технічний/заборонений вміст.")
                     rows_with_errors.add(i)
                 if text_ru.strip() and self.is_suspiciously_short_text(text_ru):
                     row_statuses.append("Підозріло короткий опис")
@@ -723,7 +724,7 @@ class SpellCheckerApp:
             else:
                 formatted_ua_text = self.format_description(text_ua, blacklist)
                 if text_ua.strip() and not formatted_ua_text:
-                    row_errors.append("[КОНТЕНТ] У стовпчику UA не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
+                    row_errors.append("[КОНТЕНТ] У стовпчику UA не виявлено придатного текстового опису або знайдено технічний/заборонений вміст.")
                     rows_with_errors.add(i)
                 if text_ua.strip() and self.is_suspiciously_short_text(text_ua):
                     row_statuses.append("Підозріло короткий опис")
@@ -853,10 +854,10 @@ class SpellCheckerApp:
             summary_text = self.build_summary_text(summaries)
             self.lbl_progress_status.config(text="Готово!")
             self.log_message("Підсумок:\n" + summary_text.replace('\n', ' | '))
-            self.root.after(0, lambda: messagebox.showinfo("Підсумок перевірки", summary_text))
+            self.root.after(0, lambda: messagebox.showinfo(f"Підсумок {APP_NAME}", summary_text))
 
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Помилка", str(e)))
+            self.root.after(0, lambda: messagebox.showerror(APP_NAME, str(e)))
         finally:
             self.root.after(0, lambda: self.set_ui_state(False))
 
@@ -903,5 +904,5 @@ class SpellCheckerApp:
 
 if __name__ == "__main__":
     main_root = tk.Tk()
-    app = SpellCheckerApp(main_root)
+    app = TextCheckerApp(main_root)
     main_root.mainloop()
