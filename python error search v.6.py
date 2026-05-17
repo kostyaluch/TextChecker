@@ -13,6 +13,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 RULES_FILE = 'translation_rules.txt'
 IGNORE_FILE = 'ignore_rules.txt'
 BLACKLIST_FILE = 'blacklist_terms.txt'
+RULES_CATALOG_FILE = 'rules_catalog.txt'
 
 DEFAULT_RULES = """# Формат: російський_корінь = українські_корені_через_кому
 # Наприклад:
@@ -43,6 +44,24 @@ http://
 e-mail:
 копія
 репліка
+"""
+
+DEFAULT_RULES_CATALOG = """# Єдиний Словник Правил / Unified Rules Catalog
+# Формат: ТІППРАВИЛА|параметр1|параметр2|...
+#
+# Типи правил:
+# ERROR_REPLACEMENT|російський_корінь|українські_корені_через_кому
+# IGNORE|фраза_українською
+# AUTO_REMOVE|термін
+# FLAG_ONLY|термін
+
+# Приклади:
+ERROR_REPLACEMENT|питани|харчуванн
+ERROR_REPLACEMENT|лук|цибул
+IGNORE|збалансоване харчування
+IGNORE|зелена цибуля
+AUTO_REMOVE|www.
+FLAG_ONLY|www.
 """
 
 UKRAINIAN_MARKERS = {
@@ -124,6 +143,10 @@ class SpellCheckerApp:
         if not os.path.exists(BLACKLIST_FILE):
             with open(BLACKLIST_FILE, 'w', encoding='utf-8') as f:
                 f.write(DEFAULT_BLACKLIST)
+        
+        # Міграція: якщо rules_catalog.txt не існує, створити з legacy-файлів
+        if not os.path.exists(RULES_CATALOG_FILE):
+            self.migrate_to_rules_catalog()
 
     def create_widgets(self):
         file_frame = ttk.LabelFrame(self.root, text="1. Вибір файлу та колонок", padding="10")
@@ -155,14 +178,18 @@ class SpellCheckerApp:
         self.btn_start_analysis = ttk.Button(control_frame, text="▶ Почати перевірку", command=self.start_analysis, state='disabled')
         self.btn_start_analysis.pack(side='left', padx=5, fill='x', expand=True)
 
-        self.btn_edit_rules = ttk.Button(control_frame, text="✎ Словник помилок", command=lambda: self.open_editor("Словник помилок", RULES_FILE, DEFAULT_RULES))
-        self.btn_edit_rules.pack(side='left', padx=5)
+        self.btn_edit_catalog = ttk.Button(control_frame, text="📝 Словник Правил", command=lambda: self.open_editor("Словник Правил", RULES_CATALOG_FILE, DEFAULT_RULES_CATALOG))
+        self.btn_edit_catalog.pack(side='left', padx=5)
 
-        self.btn_edit_ignores = ttk.Button(control_frame, text="🚫 Словник винятків", command=lambda: self.open_editor("Словник винятків", IGNORE_FILE, DEFAULT_IGNORES))
-        self.btn_edit_ignores.pack(side='left', padx=5)
+        # Legacy кнопки (залишені для перехідного періоду, можна видалити пізніше)
+        self.btn_edit_rules = ttk.Button(control_frame, text="✎ Помилки (legacy)", command=lambda: self.open_editor("Словник помилок", RULES_FILE, DEFAULT_RULES))
+        self.btn_edit_rules.pack(side='left', padx=2)
 
-        self.btn_edit_blacklist = ttk.Button(control_frame, text="⛔ Чорний список", command=lambda: self.open_editor("Чорний список термінів", BLACKLIST_FILE, DEFAULT_BLACKLIST))
-        self.btn_edit_blacklist.pack(side='left', padx=5)
+        self.btn_edit_ignores = ttk.Button(control_frame, text="🚫 Винятки (legacy)", command=lambda: self.open_editor("Словник винятків", IGNORE_FILE, DEFAULT_IGNORES))
+        self.btn_edit_ignores.pack(side='left', padx=2)
+
+        self.btn_edit_blacklist = ttk.Button(control_frame, text="⛔ Чорний список (legacy)", command=lambda: self.open_editor("Чорний список термінів", BLACKLIST_FILE, DEFAULT_BLACKLIST))
+        self.btn_edit_blacklist.pack(side='left', padx=2)
 
         progress_frame = ttk.Frame(self.root, padding="5")
         progress_frame.pack(fill='x', padx=10, pady=5)
@@ -237,6 +264,7 @@ class SpellCheckerApp:
     def set_ui_state(self, is_running):
         state = 'disabled' if is_running else 'normal'
         self.btn_select_file.config(state=state)
+        self.btn_edit_catalog.config(state=state)
         self.btn_edit_rules.config(state=state)
         self.btn_edit_ignores.config(state=state)
         self.btn_edit_blacklist.config(state=state)
@@ -272,6 +300,111 @@ class SpellCheckerApp:
                 if line:
                     blacklist.append(line.lower())
         return blacklist
+
+    def parse_rule_catalog(self):
+        """
+        Парсить єдиний каталог правил у форматі:
+        ТІППРАВИЛА|параметр1|параметр2|...
+        
+        Повертає словник:
+        {
+            'error_replacement': {ru_stem: [ua_stems]},
+            'ignore': [phrases],
+            'auto_remove': [terms],
+            'flag_only': [terms]
+        }
+        """
+        catalog = {
+            'error_replacement': {},
+            'ignore': [],
+            'auto_remove': [],
+            'flag_only': []
+        }
+        
+        if not os.path.exists(RULES_CATALOG_FILE):
+            return catalog
+            
+        with open(RULES_CATALOG_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.split('#')[0].strip()
+                if not line or '|' not in line:
+                    continue
+                    
+                parts = line.split('|')
+                rule_type = parts[0].strip().upper()
+                
+                if rule_type == 'ERROR_REPLACEMENT' and len(parts) >= 3:
+                    ru_stem = parts[1].strip()
+                    ua_stems = [ua.strip() for ua in parts[2].split(',')]
+                    catalog['error_replacement'][ru_stem] = ua_stems
+                    
+                elif rule_type == 'IGNORE' and len(parts) >= 2:
+                    phrase = parts[1].strip().lower()
+                    catalog['ignore'].append(phrase)
+                    
+                elif rule_type == 'AUTO_REMOVE' and len(parts) >= 2:
+                    term = parts[1].strip().lower()
+                    catalog['auto_remove'].append(term)
+                    
+                elif rule_type == 'FLAG_ONLY' and len(parts) >= 2:
+                    term = parts[1].strip().lower()
+                    catalog['flag_only'].append(term)
+                    
+        return catalog
+
+    def migrate_to_rules_catalog(self):
+        """Міграція зі старих файлів до нового rules_catalog.txt"""
+        lines = []
+        lines.append("# ============================================================================")
+        lines.append("# Єдиний Словник Правил / Unified Rules Catalog")
+        lines.append("# ============================================================================")
+        lines.append("# Автоматично згенеровано з legacy-файлів")
+        lines.append("# ")
+        lines.append("# Типи правил:")
+        lines.append("# ERROR_REPLACEMENT|російський_корінь|українські_корені_через_кому")
+        lines.append("# IGNORE|фраза_українською")
+        lines.append("# AUTO_REMOVE|термін")
+        lines.append("# FLAG_ONLY|термін")
+        lines.append("# ============================================================================")
+        lines.append("")
+        
+        # Мігруємо translation_rules.txt
+        if os.path.exists(RULES_FILE):
+            lines.append("# --- ERROR_REPLACEMENT: Помилки машинного перекладу ---")
+            lines.append("# Джерело: translation_rules.txt")
+            lines.append("")
+            rules = self.parse_rules()
+            for ru_stem, ua_stems in rules.items():
+                ua_list = ','.join(ua_stems)
+                lines.append(f"ERROR_REPLACEMENT|{ru_stem}|{ua_list}")
+            lines.append("")
+        
+        # Мігруємо ignore_rules.txt
+        if os.path.exists(IGNORE_FILE):
+            lines.append("# --- IGNORE: Винятки (правильні фрази) ---")
+            lines.append("# Джерело: ignore_rules.txt")
+            lines.append("")
+            ignores = self.parse_ignores()
+            for phrase in ignores:
+                lines.append(f"IGNORE|{phrase}")
+            lines.append("")
+        
+        # Мігруємо blacklist_terms.txt
+        if os.path.exists(BLACKLIST_FILE):
+            lines.append("# --- AUTO_REMOVE + FLAG_ONLY: Заборонені терміни ---")
+            lines.append("# Джерело: blacklist_terms.txt")
+            lines.append("# Кожен термін має обидва правила для сумісності з поточною поведінкою")
+            lines.append("")
+            blacklist = self.parse_blacklist()
+            for term in blacklist:
+                lines.append(f"AUTO_REMOVE|{term}")
+                lines.append(f"FLAG_ONLY|{term}")
+            lines.append("")
+        
+        with open(RULES_CATALOG_FILE, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        
+        self.log_message(f"Створено {RULES_CATALOG_FILE} з legacy-файлів")
 
     def normalize_text(self, text):
         if pd.isna(text):
@@ -327,9 +460,13 @@ class SpellCheckerApp:
             return "..." + match.group(1).strip() + "..."
         return ""
 
-    def sentence_contains_blacklist(self, sentence, blacklist):
+    def sentence_contains_blacklist(self, sentence, blacklist_terms):
+        """
+        Перевіряє, чи містить речення заборонені терміни.
+        blacklist_terms може бути списком термінів (legacy) або списком AUTO_REMOVE правил
+        """
         sentence_lower = sentence.lower()
-        return any(term in sentence_lower for term in blacklist)
+        return any(term in sentence_lower for term in blacklist_terms)
 
     def convert_markdown_bold_to_html(self, text):
         return re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
@@ -395,7 +532,11 @@ class SpellCheckerApp:
             return 'ru'
         return 'unknown'
 
-    def format_description(self, text, blacklist):
+    def format_description(self, text, auto_remove_terms):
+        """
+        Форматує опис, вирізаючи параграфи з термінами auto_remove.
+        auto_remove_terms може бути списком (legacy blacklist) або списком AUTO_REMOVE правил
+        """
         source = self.strip_technical_html(text)
         paragraphs = self.extract_paragraphs(source)
         if not paragraphs:
@@ -415,7 +556,7 @@ class SpellCheckerApp:
                 current_list_labels = set()
 
         for paragraph_html, paragraph_text in paragraphs:
-            if self.sentence_contains_blacklist(paragraph_text, blacklist):
+            if self.sentence_contains_blacklist(paragraph_text, auto_remove_terms):
                 continue
             if self.contains_chinese(paragraph_text):
                 continue
@@ -476,9 +617,21 @@ class SpellCheckerApp:
             self.log_message("Початок перевірки...")
             self.lbl_progress_status.config(text="Зчитування даних...")
 
-            rules = self.parse_rules()
-            ignores = self.parse_ignores()
-            blacklist = self.parse_blacklist()
+            # Спробувати використати новий каталог правил
+            catalog = self.parse_rule_catalog()
+            
+            # Fallback на legacy файли, якщо каталог порожній
+            if not catalog['error_replacement'] and not catalog['auto_remove']:
+                rules = self.parse_rules()
+                ignores = self.parse_ignores()
+                blacklist = self.parse_blacklist()
+                auto_remove_terms = blacklist
+                flag_only_terms = blacklist
+            else:
+                rules = catalog['error_replacement']
+                ignores = catalog['ignore']
+                auto_remove_terms = catalog['auto_remove']
+                flag_only_terms = catalog['flag_only']
 
             df = pd.read_excel(self.file_path)
             total_rows = len(df)
@@ -507,7 +660,7 @@ class SpellCheckerApp:
                     rows_with_errors.add(i)
                     rows_with_language_mismatch.add(i)
                 else:
-                    formatted_ru_text = self.format_description(text_ru, blacklist)
+                    formatted_ru_text = self.format_description(text_ru, auto_remove_terms)
                     if text_ru.strip() and not formatted_ru_text:
                         row_errors.append("[КОНТЕНТ] У стовпчику RU не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
                         rows_with_errors.add(i)
@@ -522,40 +675,41 @@ class SpellCheckerApp:
                     rows_with_errors.add(i)
                     rows_with_language_mismatch.add(i)
                 else:
-                    formatted_ua_text = self.format_description(text_ua, blacklist)
+                    formatted_ua_text = self.format_description(text_ua, auto_remove_terms)
                     if text_ua.strip() and not formatted_ua_text:
                         row_errors.append("[КОНТЕНТ] У стовпчику UA не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
                         rows_with_errors.add(i)
                         rows_with_language_mismatch.add(i)
 
-                # Перевірка чорного списку для RU
+                # Перевірка FLAG_ONLY термінів для RU
                 text_ru_lower = text_ru.lower()
-                for blacklisted_term in blacklist:
-                    if blacklisted_term in text_ru_lower:
-                        idx = text_ru_lower.find(blacklisted_term)
+                for flagged_term in flag_only_terms:
+                    if flagged_term in text_ru_lower:
+                        idx = text_ru_lower.find(flagged_term)
                         start = max(0, idx - 30)
-                        end = min(len(text_ru), idx + len(blacklisted_term) + 30)
+                        end = min(len(text_ru), idx + len(flagged_term) + 30)
                         context = text_ru[start:end].strip()
                         if start > 0:
                             context = "..." + context
                         if end < len(text_ru):
                             context = context + "..."
-                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті RU: \"{context}\"")
+                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{flagged_term}' у тексті RU: \"{context}\"")
 
-                # Перевірка чорного списку для UA
+                # Перевірка FLAG_ONLY термінів для UA
                 text_ua_lower = text_ua.lower()
-                for blacklisted_term in blacklist:
-                    if blacklisted_term in text_ua_lower:
-                        idx = text_ua_lower.find(blacklisted_term)
+                for flagged_term in flag_only_terms:
+                    if flagged_term in text_ua_lower:
+                        idx = text_ua_lower.find(flagged_term)
                         start = max(0, idx - 30)
-                        end = min(len(text_ua), idx + len(blacklisted_term) + 30)
+                        end = min(len(text_ua), idx + len(flagged_term) + 30)
                         context = text_ua[start:end].strip()
                         if start > 0:
                             context = "..." + context
                         if end < len(text_ua):
                             context = context + "..."
-                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті UA: \"{context}\"")
+                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{flagged_term}' у тексті UA: \"{context}\"")
 
+                # Перевірка ERROR_REPLACEMENT правил
                 for ru_stem, ua_stems in rules.items():
                     match_ru = re.search(r'(?i)\b' + re.escape(ru_stem) + r'[\w-]*\b', text_ru)
                     if match_ru:
