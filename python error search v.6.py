@@ -528,6 +528,21 @@ class SpellCheckerApp:
                         rows_with_errors.add(i)
                         rows_with_language_mismatch.add(i)
 
+                # Перевірка чорного списку для RU
+                text_ru_lower = text_ru.lower()
+                for blacklisted_term in blacklist:
+                    if blacklisted_term in text_ru_lower:
+                        idx = text_ru_lower.find(blacklisted_term)
+                        start = max(0, idx - 30)
+                        end = min(len(text_ru), idx + len(blacklisted_term) + 30)
+                        context = text_ru[start:end].strip()
+                        if start > 0:
+                            context = "..." + context
+                        if end < len(text_ru):
+                            context = context + "..."
+                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті RU: \"{context}\"")
+
+                # Перевірка чорного списку для UA
                 text_ua_lower = text_ua.lower()
                 for blacklisted_term in blacklist:
                     if blacklisted_term in text_ua_lower:
@@ -539,7 +554,7 @@ class SpellCheckerApp:
                             context = "..." + context
                         if end < len(text_ua):
                             context = context + "..."
-                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\"")
+                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті UA: \"{context}\"")
 
                 for ru_stem, ua_stems in rules.items():
                     match_ru = re.search(r'(?i)\b' + re.escape(ru_stem) + r'[\w-]*\b', text_ru)
