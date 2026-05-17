@@ -573,9 +573,7 @@ class SpellCheckerApp:
             status_col_name = self.get_unique_column_name(df.columns, 'Статус')
 
             # Create status column - only errors that remain unfixed (exclude Technical HTML errors)
-            status_column = []
-            for row_error_text in errors_column:
-                status_column.append(self.filter_content_errors(row_error_text))
+            status_column = [self.filter_content_errors(row_error_text) for row_error_text in errors_column]
 
             df[errors_col_name] = errors_column
             df[checked_ru_col_name] = formatted_ru_descriptions
@@ -584,9 +582,10 @@ class SpellCheckerApp:
 
             # Reorder columns: Помилки, Описание;1_checked, Описание (ua);1_checked, Статус
             # Get all original columns except the new ones we just added
-            original_cols = [col for col in df.columns if col not in [errors_col_name, checked_ru_col_name, checked_ua_col_name, status_col_name]]
+            new_cols = [errors_col_name, checked_ru_col_name, checked_ua_col_name, status_col_name]
+            original_cols = [col for col in df.columns if col not in new_cols]
             # Create new column order with our specific columns first
-            new_column_order = [errors_col_name, checked_ru_col_name, checked_ua_col_name, status_col_name] + original_cols
+            new_column_order = new_cols + original_cols
             df = df[new_column_order]
 
             self.lbl_progress_status.config(text="Збереження файлу...")
