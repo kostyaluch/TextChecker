@@ -325,23 +325,6 @@ class SpellCheckerApp:
         )
         self.update_file_selection(list(paths))
 
-    def select_folder(self):
-        folder = filedialog.askdirectory(title="Оберіть папку з Excel-файлами")
-        if not folder:
-            return
-        paths = []
-        for file_name in sorted(os.listdir(folder)):
-            if (
-                file_name.lower().endswith('.xlsx')
-                and not file_name.startswith('~$')
-                and not file_name.startswith('.~lock.')
-            ):
-                paths.append(os.path.join(folder, file_name))
-        if not paths:
-            messagebox.showwarning("Увага", "У вибраній папці не знайдено .xlsx файлів.")
-            return
-        self.update_file_selection(paths)
-
     def set_ui_state(self, is_running):
         state = 'disabled' if is_running else 'normal'
         self.btn_select_file.config(state=state)
