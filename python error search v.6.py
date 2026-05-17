@@ -7,7 +7,7 @@ import time
 import re
 from html import unescape
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 RULES_FILE = 'translation_rules.txt'
@@ -463,6 +463,14 @@ class SpellCheckerApp:
             counter += 1
         return f"{base_name}_{counter}"
 
+    def filter_content_errors(self, error_text):
+        """Filter out [КОНТЕНТ] errors about technical HTML from error text"""
+        filtered_errors = []
+        for error_line in error_text.split('\n'):
+            if error_line and not error_line.startswith('[КОНТЕНТ]'):
+                filtered_errors.append(error_line)
+        return '\n'.join(filtered_errors)
+
     def run_analysis(self, save_path, col_ru, col_ua):
         try:
             self.log_message("Початок перевірки...")
@@ -559,13 +567,26 @@ class SpellCheckerApp:
                     self.progress_bar['value'] = i + 1
                     self.lbl_progress_status.config(text=f"Обробка: {i + 1}/{total_rows}")
 
-            errors_col_name = self.get_unique_column_name(df.columns, 'Помилки перекладу')
-            checked_ru_col_name = self.get_unique_column_name(df.columns, f'{col_ru}_checked')
-            checked_ua_col_name = self.get_unique_column_name(df.columns, f'{col_ua}_checked')
+            errors_col_name = self.get_unique_column_name(df.columns, 'Помилки')
+            checked_ru_col_name = self.get_unique_column_name(df.columns, f'{col_ru};1_checked')
+            checked_ua_col_name = self.get_unique_column_name(df.columns, f'{col_ua};1_checked')
+            status_col_name = self.get_unique_column_name(df.columns, 'Статус')
+
+            # Create status column - only errors that remain unfixed (exclude Technical HTML errors)
+            status_column = [self.filter_content_errors(row_error_text) for row_error_text in errors_column]
 
             df[errors_col_name] = errors_column
             df[checked_ru_col_name] = formatted_ru_descriptions
             df[checked_ua_col_name] = formatted_ua_descriptions
+            df[status_col_name] = status_column
+
+            # Reorder columns: Помилки, Описание;1_checked, Описание (ua);1_checked, Статус
+            # Get all original columns except the new ones we just added
+            new_cols = [errors_col_name, checked_ru_col_name, checked_ua_col_name, status_col_name]
+            original_cols = [col for col in df.columns if col not in new_cols]
+            # Create new column order with our specific columns first
+            new_column_order = new_cols + original_cols
+            df = df[new_column_order]
 
             self.lbl_progress_status.config(text="Збереження файлу...")
             wb = Workbook()
@@ -573,13 +594,46 @@ class SpellCheckerApp:
             for r in dataframe_to_rows(df, index=False, header=True):
                 ws.append(r)
 
+            # Apply formatting to all cells
+            bold_font = Font(bold=True)
+            wrap_alignment = Alignment(wrap_text=True, vertical='top')
             yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
             red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
 
+            # Find column indices for the checked columns
+            checked_ru_col_idx = None
+            checked_ua_col_idx = None
+            for idx, cell in enumerate(ws[1], start=1):
+                if cell.value == checked_ru_col_name:
+                    checked_ru_col_idx = idx
+                elif cell.value == checked_ua_col_name:
+                    checked_ua_col_idx = idx
+                # Early exit if both columns found
+                if checked_ru_col_idx and checked_ua_col_idx:
+                    break
+
+            # Format header row (row 1): height 30, bold, wrap text
+            ws.row_dimensions[1].height = 30
+            for cell in ws[1]:
+                cell.font = bold_font
+                cell.alignment = wrap_alignment
+
+            # Format data rows: height 15, wrap text
+            for row_num in range(2, ws.max_row + 1):
+                ws.row_dimensions[row_num].height = 15
+                for cell in ws[row_num]:
+                    cell.alignment = wrap_alignment
+
+            # Apply highlighting only to cells with errors in _checked columns
             for row_idx in rows_with_errors:
+                excel_row_num = row_idx + 2  # +2 because Excel is 1-indexed and we have a header row
                 fill_to_use = red_fill if row_idx in rows_with_language_mismatch else yellow_fill
-                for cell in ws[row_idx + 2]:
-                    cell.fill = fill_to_use
+                
+                # Only highlight the _checked columns if they have content
+                if checked_ru_col_idx and ws.cell(row=excel_row_num, column=checked_ru_col_idx).value:
+                    ws.cell(row=excel_row_num, column=checked_ru_col_idx).fill = fill_to_use
+                if checked_ua_col_idx and ws.cell(row=excel_row_num, column=checked_ua_col_idx).value:
+                    ws.cell(row=excel_row_num, column=checked_ua_col_idx).fill = fill_to_use
 
             wb.save(save_path)
             self.progress_bar['value'] = total_rows
@@ -587,7 +641,7 @@ class SpellCheckerApp:
             self.log_message(
                 f"Завершено. Знайдено помилок у {len(rows_with_errors)} рядках. "
                 f"Критичних рядків: {len(rows_with_language_mismatch)}. "
-                f"Створено колонки: '{checked_ru_col_name}' та '{checked_ua_col_name}'."
+                f"Створено колонки: '{checked_ru_col_name}', '{checked_ua_col_name}' та '{status_col_name}'."
             )
             self.root.after(0, lambda: messagebox.showinfo("Успіх", f"Файл збережено:\n{save_path}"))
 
