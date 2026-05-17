@@ -463,6 +463,14 @@ class SpellCheckerApp:
             counter += 1
         return f"{base_name}_{counter}"
 
+    def filter_content_errors(self, error_text):
+        """Filter out [КОНТЕНТ] errors about technical HTML from error text"""
+        filtered_errors = []
+        for error_line in error_text.split('\n'):
+            if error_line and not error_line.startswith('[КОНТЕНТ]'):
+                filtered_errors.append(error_line)
+        return '\n'.join(filtered_errors)
+
     def run_analysis(self, save_path, col_ru, col_ua):
         try:
             self.log_message("Початок перевірки...")
@@ -566,13 +574,8 @@ class SpellCheckerApp:
 
             # Create status column - only errors that remain unfixed (exclude Technical HTML errors)
             status_column = []
-            for i, row_error_text in enumerate(errors_column):
-                # Filter out [КОНТЕНТ] errors about technical HTML
-                filtered_errors = []
-                for error_line in row_error_text.split('\n'):
-                    if error_line and not error_line.startswith('[КОНТЕНТ]'):
-                        filtered_errors.append(error_line)
-                status_column.append('\n'.join(filtered_errors))
+            for row_error_text in errors_column:
+                status_column.append(self.filter_content_errors(row_error_text))
 
             df[errors_col_name] = errors_column
             df[checked_ru_col_name] = formatted_ru_descriptions
@@ -606,6 +609,9 @@ class SpellCheckerApp:
                     checked_ru_col_idx = idx
                 elif cell.value == checked_ua_col_name:
                     checked_ua_col_idx = idx
+                # Early exit if both columns found
+                if checked_ru_col_idx and checked_ua_col_idx:
+                    break
 
             # Format header row (row 1): height 30, bold, wrap text
             ws.row_dimensions[1].height = 30
