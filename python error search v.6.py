@@ -74,10 +74,12 @@ TECHNICAL_HTML_PATTERNS = [
     r'(?is)<input\b[^>]*(zbViewModulesHeight)[^>]*>',
 ]
 HTML_BLACKLIST_EXEMPT_TERMS = ('http://', 'https://', 'ftp://', 'www.')
-HTML_BLACKLIST_EXEMPT_DOMAIN_PATTERNS = (
-    re.compile(r'(?i)\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b'),
-    re.compile(r'(?i)//[a-z0-9-]+(?:\.[a-z0-9-]+)+'),
-)
+TECHNICAL_BLACKLIST_CONTEXT_PATTERNS = [
+    re.compile(r'(?is)(src|href|poster|data-[\w-]+|cssurl)\s*=\s*["\'][^"\']*$'),
+    re.compile(r'(?is)url\(\s*["\']?[^)\"\']*$'),
+    re.compile(r'(?is)//[a-z0-9-_.]*$'),
+    re.compile(r'(?is)<[^>]*$'),
+]
 
 
 class TextEditor(Toplevel):
@@ -451,36 +453,54 @@ class TextCheckerApp:
         sentence_lower = sentence.lower()
         return any(term in sentence_lower for term in blacklist)
 
-    def should_ignore_blacklist_term_in_html(self, source_text, term):
-        if not source_text or not term:
-            return False
-        source_text = self.normalize_text(source_text)
-        term = term.lower()
-        source_lower = source_text.lower()
+    def is_match_inside_technical_context(self, source_text, match_start, match_end):
+        left_context = source_text[max(0, match_start - 120):match_start]
+        right_context = source_text[match_end:min(len(source_text), match_end + 120)]
+        around_context = source_text[max(0, match_start - 30):min(len(source_text), match_end + 30)]
+        combined_context = left_context + source_text[match_start:match_end] + right_context
 
-        if term in HTML_BLACKLIST_EXEMPT_TERMS:
-            return bool(re.search(r'(?is)<[^>]+>', source_text))
-
-        if '.' in term:
-            for pattern in HTML_BLACKLIST_EXEMPT_DOMAIN_PATTERNS:
-                for match in pattern.finditer(source_text):
-                    if match.group(0).lower().find(term) != -1:
-                        return True
-            if re.search(r'(?is)<[^>]+>', source_text) and term in source_lower:
+        for pattern in TECHNICAL_BLACKLIST_CONTEXT_PATTERNS:
+            if pattern.search(left_context):
                 return True
 
+        if re.search(r'(?is)^\s*["\']?[^"\'>\s]+["\']?\s*>', right_context):
+            return True
+        if re.search(r'(?is)<img\b', left_context):
+            return True
+        if re.search(r'(?is)background-image\s*:\s*url\(', left_context):
+            return True
+        if re.search(r'(?is)cssurl\s*=\s*["\']', left_context):
+            return True
+        if re.search(r'(?is)src\s*=\s*["\']', left_context):
+            return True
+        if re.search(r'(?is)href\s*=\s*["\']', left_context):
+            return True
+        if re.search(r'(?is)<[^>]+>', around_context) and re.search(r'(?is)(src|href|cssurl|style)\s*=', combined_context):
+            return True
+
+        return False
+
+    def should_ignore_blacklist_term_in_html(self, source_text, term, match_start, match_end):
+        if not source_text or not term:
+            return False
+        term = term.lower()
+        if term in HTML_BLACKLIST_EXEMPT_TERMS or '.' in term:
+            return self.is_match_inside_technical_context(source_text, match_start, match_end)
         return False
 
     def find_blacklist_match(self, source_text, blacklist):
         source_text = self.normalize_text(source_text)
         source_lower = source_text.lower()
         for blacklisted_term in blacklist:
-            idx = source_lower.find(blacklisted_term)
-            if idx == -1:
-                continue
-            if self.should_ignore_blacklist_term_in_html(source_text, blacklisted_term):
-                continue
-            return blacklisted_term, idx
+            start_idx = 0
+            while True:
+                idx = source_lower.find(blacklisted_term, start_idx)
+                if idx == -1:
+                    break
+                match_end = idx + len(blacklisted_term)
+                if not self.should_ignore_blacklist_term_in_html(source_text, blacklisted_term, idx, match_end):
+                    return blacklisted_term, idx
+                start_idx = idx + 1
         return None, -1
 
     def convert_markdown_bold_to_html(self, text):
