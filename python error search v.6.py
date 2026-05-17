@@ -144,6 +144,39 @@ class SpellCheckerApp:
         self.style.configure('TLabelframe.Label', font=('Segoe UI', 10, 'bold'))
         self.style.configure('TButton', padding=(10, 6))
         self.style.configure('TCheckbutton', padding=2)
+        
+        # Configure checkbutton to use checkmark instead of cross
+        # Create custom images for checked/unchecked states with checkmarks
+        try:
+            # Small checkmark icon for checked state (✓)
+            checked_img = tk.PhotoImage(width=16, height=16)
+            checked_img.put(("#4CAF50",) * 16, to=(0, 0, 16, 16))  # Green background
+            checked_img.put(("#FFFFFF",) * 2, to=(5, 8, 7, 10))  # Checkmark stem
+            checked_img.put(("#FFFFFF",) * 2, to=(7, 10, 9, 12))
+            checked_img.put(("#FFFFFF",) * 2, to=(9, 6, 11, 8))
+            
+            # Empty box for unchecked state
+            unchecked_img = tk.PhotoImage(width=16, height=16)
+            unchecked_img.put(("#E0E0E0",) * 16, to=(0, 0, 16, 16))  # Light gray background
+            unchecked_img.put(("#FFFFFF",) * 14, to=(1, 1, 15, 15))  # White interior
+            
+            # Keep references to prevent garbage collection
+            self.checked_img = checked_img
+            self.unchecked_img = unchecked_img
+            
+            # Create custom element with images
+            self.style.element_create('custom.indicator', 'image', unchecked_img,
+                                     ('selected', checked_img), width=16, border=0, sticky='w')
+            
+            # Update layout to use custom indicator
+            self.style.layout('TCheckbutton',
+                [('Checkbutton.padding',
+                  {'children': [('custom.indicator', {'side': 'left', 'sticky': ''}),
+                                ('Checkbutton.label', {'side': 'left', 'sticky': 'nswe'})],
+                   'sticky': 'nswe'})])
+        except Exception:
+            # If custom styling fails, fall back to default
+            pass
 
     def create_widgets(self):
         ttk.Label(self.root, text=f"Аналізатор Перекладу Описів {APP_VERSION}", style='Title.TLabel').pack(
@@ -158,9 +191,6 @@ class SpellCheckerApp:
 
         self.btn_select_file = ttk.Button(file_select_row, text="📂 Обрати Excel-файли", command=self.select_files)
         self.btn_select_file.pack(side='left', padx=5)
-
-        self.btn_select_folder = ttk.Button(file_select_row, text="📁 Обрати папку", command=self.select_folder)
-        self.btn_select_folder.pack(side='left', padx=5)
 
         self.lbl_file_status = ttk.Label(file_select_row, text="Файли не обрано", foreground="gray")
         self.lbl_file_status.pack(side='left', padx=8, fill='x', expand=True)
@@ -315,7 +345,6 @@ class SpellCheckerApp:
     def set_ui_state(self, is_running):
         state = 'disabled' if is_running else 'normal'
         self.btn_select_file.config(state=state)
-        self.btn_select_folder.config(state=state)
         self.btn_edit_rules.config(state=state)
         self.btn_edit_ignores.config(state=state)
         self.btn_edit_blacklist.config(state=state)
