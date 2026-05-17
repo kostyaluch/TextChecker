@@ -148,12 +148,20 @@ class SpellCheckerApp:
         # Configure checkbutton to use checkmark instead of cross
         # Create custom images for checked/unchecked states with checkmarks
         try:
+            # Checkmark coordinates
+            CHECKMARK_STEM_X1, CHECKMARK_STEM_Y1 = 5, 8
+            CHECKMARK_STEM_X2, CHECKMARK_STEM_Y2 = 7, 10
+            CHECKMARK_MID_X1, CHECKMARK_MID_Y1 = 7, 10
+            CHECKMARK_MID_X2, CHECKMARK_MID_Y2 = 9, 12
+            CHECKMARK_TOP_X1, CHECKMARK_TOP_Y1 = 9, 6
+            CHECKMARK_TOP_X2, CHECKMARK_TOP_Y2 = 11, 8
+            
             # Small checkmark icon for checked state (✓)
             checked_img = tk.PhotoImage(width=16, height=16)
             checked_img.put(("#4CAF50",) * 16, to=(0, 0, 16, 16))  # Green background
-            checked_img.put(("#FFFFFF",) * 2, to=(5, 8, 7, 10))  # Checkmark stem
-            checked_img.put(("#FFFFFF",) * 2, to=(7, 10, 9, 12))
-            checked_img.put(("#FFFFFF",) * 2, to=(9, 6, 11, 8))
+            checked_img.put(("#FFFFFF",) * 2, to=(CHECKMARK_STEM_X1, CHECKMARK_STEM_Y1, CHECKMARK_STEM_X2, CHECKMARK_STEM_Y2))
+            checked_img.put(("#FFFFFF",) * 2, to=(CHECKMARK_MID_X1, CHECKMARK_MID_Y1, CHECKMARK_MID_X2, CHECKMARK_MID_Y2))
+            checked_img.put(("#FFFFFF",) * 2, to=(CHECKMARK_TOP_X1, CHECKMARK_TOP_Y1, CHECKMARK_TOP_X2, CHECKMARK_TOP_Y2))
             
             # Empty box for unchecked state
             unchecked_img = tk.PhotoImage(width=16, height=16)
@@ -174,9 +182,10 @@ class SpellCheckerApp:
                   {'children': [('custom.indicator', {'side': 'left', 'sticky': ''}),
                                 ('Checkbutton.label', {'side': 'left', 'sticky': 'nswe'})],
                    'sticky': 'nswe'})])
-        except Exception:
-            # If custom styling fails, fall back to default
-            pass
+        except (tk.TclError, AttributeError) as e:
+            # If custom styling fails (e.g., due to theme incompatibility), fall back to default
+            # Log error for debugging but don't crash the application
+            print(f"Warning: Could not apply custom checkbox styling: {e}")
 
     def create_widgets(self):
         ttk.Label(self.root, text=f"Аналізатор Перекладу Описів {APP_VERSION}", style='Title.TLabel').pack(
