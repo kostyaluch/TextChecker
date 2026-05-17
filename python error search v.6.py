@@ -1,22 +1,23 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, Toplevel
-import pandas as pd
-import threading
 import os
-import sys
-import subprocess
-import time
 import re
+import sys
+import time
+import threading
+import subprocess
+import tkinter as tk
 from html import unescape
+from tkinter import Toplevel, filedialog, messagebox, ttk
+
+import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 RULES_FILE = 'translation_rules.txt'
 IGNORE_FILE = 'ignore_rules.txt'
 BLACKLIST_FILE = 'blacklist_terms.txt'
 APP_NAME = "TextChecker"
-APP_VERSION = "v14"
+APP_VERSION = "v15"
 MIN_SHORT_DESC_WORDS = 2
 MIN_SHORT_DESC_LENGTH = 24
 DECIMAL_MAX_INT_DIGITS = 4
@@ -36,11 +37,11 @@ DEFAULT_IGNORES = """# Додайте сюди фрази (українсько�
 # Якщо програма знайде цю фразу у реченні, вона проігнорує помилку.
 # Кожна фраза з нового рядка:
 збалансоване харчування
-дитяче харчування
+dитяче харчування
 здорове харчування
 зелена цибуля
 ріпчаста цибуля
-"""
+""".replace('dитяче', 'дитяче')
 
 DEFAULT_BLACKLIST = """# Додайте сюди слова та фрази (будь-якою мовою), які є ПІДОЗРІЛИМИ або ЗАБОРОНЕНИМИ.
 # Якщо програма знайде цю фразу в українському описі, вона позначить рядок як помилковий.
@@ -80,6 +81,7 @@ TECHNICAL_BLACKLIST_CONTEXT_PATTERNS = [
     re.compile(r'(?is)//[a-z0-9-_.]*$'),
     re.compile(r'(?is)<[^>]*$'),
 ]
+ERROR_STATUS_PREFIXES = ('[МОВА]', '[КОНТЕНТ]', '[ЗАБОРОНЕНИЙ ТЕРМІН]', '[ПОМИЛКА]')
 
 
 class TextEditor(Toplevel):
@@ -263,7 +265,13 @@ class TextCheckerApp:
         ua_col = find_by_priority(ua_priority)
 
         if not ru_col:
-            ru_col = next((c for c in columns if any(token in normalized[c] for token in ['описание', 'description']) and '(ua)' not in normalized[c] and 'ua' not in normalized[c] and 'uk' not in normalized[c]), '')
+            ru_col = next((
+                c for c in columns
+                if any(token in normalized[c] for token in ['описание', 'description'])
+                and '(ua)' not in normalized[c]
+                and 'ua' not in normalized[c]
+                and 'uk' not in normalized[c]
+            ), '')
         if not ua_col:
             ua_col = next((c for c in columns if any(token in normalized[c] for token in ['ua', 'uk', 'укр', '(ua)'])), '')
 
@@ -374,7 +382,6 @@ class TextCheckerApp:
         text = str(text).replace('\u00A0', ' ').replace('\u200B', '')
         text = text.replace('“', '"').replace('”', '"').replace('„', '"')
         text = text.replace('’', "'").replace('`', "'")
-        # Convert decimal commas to dots only in likely measurement/value contexts.
         text = re.sub(
             rf'(?<!\d)(\d{{1,{DECIMAL_MAX_INT_DIGITS}}}),(\d{{1,{DECIMAL_MAX_FRACTION_DIGITS}}})(?=\s*(?:{DECIMAL_CONTEXT_UNITS}|$|[)\].,;:!?]))',
             r'\1.\2',
@@ -441,9 +448,9 @@ class TextCheckerApp:
     def extract_error_sentence(self, text, error_word_stem):
         text_clean = self.clean_html_text(text)
         sentences = re.split(r'(?<=[.!?\n])\s+', text_clean)
-        for s in sentences:
-            if re.search(r'(?i)\b' + re.escape(error_word_stem), s):
-                return s.strip(' .-;:,\t')
+        for sentence in sentences:
+            if re.search(r'(?i)\b' + re.escape(error_word_stem), sentence):
+                return sentence.strip(' .-;:,\t')
         match = re.search(r'(.{0,50}\b' + re.escape(error_word_stem) + r'.{0,50})', text_clean, re.IGNORECASE)
         if match:
             return "..." + match.group(1).strip() + "..."
@@ -522,7 +529,6 @@ class TextCheckerApp:
             if paragraph_text:
                 normalized_paragraphs.append((paragraph, paragraph_text))
         if not normalized_paragraphs:
-            # Fallback for plain-text inputs without <p> tags.
             plain_text = self.clean_html_text(source)
             if plain_text:
                 normalized_paragraphs.append((plain_text, plain_text))
@@ -617,7 +623,6 @@ class TextCheckerApp:
                     result.append(f"<p><strong>{label}:</strong> {value}</p>")
                     continue
 
-                # Exact-match deduplication (label + value) to avoid dropping similar-but-different items.
                 item_signature = (label, value)
                 if item_signature not in current_list_signatures:
                     current_list_items.append(f"<li><strong>{label}:</strong> {value}</li>")
@@ -637,14 +642,6 @@ class TextCheckerApp:
         cleaned = re.sub(r'\n{2,}', '\n', cleaned)
         return cleaned.strip()
 
-    def get_unique_column_name(self, columns, base_name):
-        if base_name not in columns:
-            return base_name
-        counter = 2
-        while f"{base_name}_{counter}" in columns:
-            counter += 1
-        return f"{base_name}_{counter}"
-
     def get_existing_or_create_column(self, df, column_name):
         if column_name not in df.columns:
             df[column_name] = ''
@@ -661,10 +658,16 @@ class TextCheckerApp:
             raise ValueError("Не вдалося автоматично визначити колонки RU/UA у файлі.")
         return ru_col, ua_col
 
-    def compose_status(self, statuses):
+    def compose_status_from_errors(self, row_errors):
+        statuses = []
+        for error in row_errors:
+            for prefix in ERROR_STATUS_PREFIXES:
+                if error.startswith(prefix):
+                    statuses.append(prefix.strip('[]'))
+                    break
         ordered = []
         for status in statuses:
-            if status and status not in ordered:
+            if status not in ordered:
                 ordered.append(status)
         return " | ".join(ordered) if ordered else "OK"
 
@@ -699,6 +702,35 @@ class TextCheckerApp:
             f"OK: {totals['ok_rows']}"
         )
 
+    def reorder_result_columns(self, df, errors_col_name, checked_ru_col_name, checked_ua_col_name, status_col_name):
+        rename_map = {errors_col_name: 'Помилки'}
+        df = df.rename(columns=rename_map)
+        preferred_order = ['Помилки', checked_ru_col_name, checked_ua_col_name, status_col_name]
+        existing_preferred = [column for column in preferred_order if column in df.columns]
+        remaining_columns = [column for column in df.columns if column not in existing_preferred]
+        return df[remaining_columns + existing_preferred]
+
+    def apply_worksheet_formatting(self, ws, checked_ru_excel_col, checked_ua_excel_col, rows_with_language_mismatch, rows_with_other_errors):
+        header_font = Font(bold=True)
+        wrap_alignment = Alignment(wrap_text=True, vertical='top')
+        yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+        red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
+
+        for row_idx, row in enumerate(ws.iter_rows(), start=1):
+            ws.row_dimensions[row_idx].height = 30 if row_idx == 1 else 15
+            for cell in row:
+                cell.alignment = wrap_alignment
+                if row_idx == 1:
+                    cell.font = header_font
+
+        for row_idx in rows_with_other_errors:
+            for column_idx in (checked_ru_excel_col, checked_ua_excel_col):
+                ws.cell(row=row_idx + 2, column=column_idx).fill = yellow_fill
+
+        for row_idx in rows_with_language_mismatch:
+            for column_idx in (checked_ru_excel_col, checked_ua_excel_col):
+                ws.cell(row=row_idx + 2, column=column_idx).fill = red_fill
+
     def process_single_file(self, file_path, preferred_ru, preferred_ua, rules, ignores, blacklist, html_only_mode, skip_processed):
         self.log_message(f"Обробка файлу: {os.path.basename(file_path)}")
         df = pd.read_excel(file_path)
@@ -720,16 +752,15 @@ class TextCheckerApp:
         rows_with_short_desc = set()
         rows_skipped = set()
         rows_ok = set()
+        rows_with_other_errors = set()
 
         for i, row in df.iterrows():
             text_ru = self.normalize_text(row.get(col_ru, ''))
             text_ua = self.normalize_text(row.get(col_ua, ''))
             row_errors = []
-            row_statuses = []
 
             existing_ru_checked = self.normalize_text(row.get(checked_ru_col_name, ''))
             existing_ua_checked = self.normalize_text(row.get(checked_ua_col_name, ''))
-            # Skip when at least one checked field is already populated to avoid accidental overwrite.
             if skip_processed and (existing_ru_checked.strip() or existing_ua_checked.strip()):
                 rows_skipped.add(i)
                 df.at[i, status_col_name] = "Пропущено (вже оброблено)"
@@ -743,10 +774,8 @@ class TextCheckerApp:
             ua_has_chinese = self.contains_chinese(text_ua)
 
             if ru_has_technical or ua_has_technical:
-                row_statuses.append("Технічний HTML")
                 rows_with_technical_html.add(i)
             if ru_has_chinese or ua_has_chinese:
-                row_statuses.append("Китайський текст")
                 rows_with_chinese.add(i)
 
             if text_ru.strip() and ru_detected_lang in ('ua', 'zh') and not html_only_mode:
@@ -755,7 +784,6 @@ class TextCheckerApp:
                 else:
                     row_errors.append("[МОВА] У стовпчику RU виявлено український текст. Потрібен переклад російською.")
                 formatted_ru_text = ""
-                row_statuses.append("Потрібен переклад")
                 rows_need_translation.add(i)
                 rows_with_errors.add(i)
                 rows_with_language_mismatch.add(i)
@@ -764,8 +792,8 @@ class TextCheckerApp:
                 if text_ru.strip() and not formatted_ru_text:
                     row_errors.append("[КОНТЕНТ] У стовпчику RU не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
                     rows_with_errors.add(i)
+                    rows_with_other_errors.add(i)
                 if text_ru.strip() and self.is_suspiciously_short_text(text_ru):
-                    row_statuses.append("Підозріло короткий опис")
                     rows_with_short_desc.add(i)
 
             if text_ua.strip() and ua_detected_lang in ('ru', 'zh') and not html_only_mode:
@@ -774,7 +802,6 @@ class TextCheckerApp:
                 else:
                     row_errors.append("[МОВА] У стовпчику UA виявлено російський текст. Потрібен переклад українською.")
                 formatted_ua_text = ""
-                row_statuses.append("Потрібен переклад")
                 rows_need_translation.add(i)
                 rows_with_errors.add(i)
                 rows_with_language_mismatch.add(i)
@@ -783,8 +810,8 @@ class TextCheckerApp:
                 if text_ua.strip() and not formatted_ua_text:
                     row_errors.append("[КОНТЕНТ] У стовпчику UA не виявлено придатного текстового опису або знайдено технічний HTML/китайський контент.")
                     rows_with_errors.add(i)
+                    rows_with_other_errors.add(i)
                 if text_ua.strip() and self.is_suspiciously_short_text(text_ua):
-                    row_statuses.append("Підозріло короткий опис")
                     rows_with_short_desc.add(i)
 
             matched_blacklist_term, matched_idx = self.find_blacklist_match(text_ua, blacklist)
@@ -797,9 +824,9 @@ class TextCheckerApp:
                 if end < len(text_ua):
                     context = context + "..."
                 row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{matched_blacklist_term}' у тексті: \"{context}\"")
-                row_statuses.append("Заборонений термін")
                 rows_with_blacklist.add(i)
                 rows_with_errors.add(i)
+                rows_with_other_errors.add(i)
 
             if not html_only_mode:
                 for ru_stem, ua_stems in rules.items():
@@ -817,21 +844,23 @@ class TextCheckerApp:
                                 if not is_ignored and error_sentence:
                                     row_errors.append(f"[ПОМИЛКА] Значення '{ru_full_word}' хибно перекладено. Речення: \"{error_sentence}\"")
                                     rows_with_errors.add(i)
+                                    rows_with_other_errors.add(i)
 
             df.at[i, errors_col_name] = "\n".join(row_errors)
             df.at[i, checked_ru_col_name] = formatted_ru_text
             df.at[i, checked_ua_col_name] = formatted_ua_text
-            if row_statuses:
-                df.at[i, status_col_name] = self.compose_status(row_statuses)
-            elif row_errors:
-                df.at[i, status_col_name] = "Потрібен переклад"
+            df.at[i, status_col_name] = self.compose_status_from_errors(row_errors)
+
+            if row_errors:
+                rows_with_errors.add(i)
             else:
-                df.at[i, status_col_name] = "OK"
                 rows_ok.add(i)
 
             if i % 10 == 0:
                 self.progress_bar['value'] = i + 1
                 self.lbl_progress_status.config(text=f"{os.path.basename(file_path)}: {i + 1}/{total_rows}")
+
+        df = self.reorder_result_columns(df, errors_col_name, checked_ru_col_name, checked_ua_col_name, status_col_name)
 
         save_base, ext = os.path.splitext(file_path)
         save_path = f"{save_base}_checked{ext}"
@@ -839,16 +868,12 @@ class TextCheckerApp:
         self.lbl_progress_status.config(text=f"Збереження: {os.path.basename(save_path)}")
         wb = Workbook()
         ws = wb.active
-        for r in dataframe_to_rows(df, index=False, header=True):
-            ws.append(r)
+        for row_data in dataframe_to_rows(df, index=False, header=True):
+            ws.append(row_data)
 
-        yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
-        red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
-
-        for row_idx in rows_with_errors:
-            fill_to_use = red_fill if row_idx in rows_with_language_mismatch else yellow_fill
-            for cell in ws[row_idx + 2]:
-                cell.fill = fill_to_use
+        checked_ru_excel_col = list(df.columns).index(checked_ru_col_name) + 1
+        checked_ua_excel_col = list(df.columns).index(checked_ua_col_name) + 1
+        self.apply_worksheet_formatting(ws, checked_ru_excel_col, checked_ua_excel_col, rows_with_language_mismatch, rows_with_other_errors)
 
         wb.save(save_path)
         self.progress_bar['value'] = total_rows
