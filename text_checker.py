@@ -417,6 +417,45 @@ class SpellCheckerApp:
         text = re.sub(r'\s+', ' ', text).strip(' .')
         return text
 
+    def is_in_technical_context(self, text, match_pos):
+        """Check if a position in text is within technical HTML/URL context."""
+        # Check if match is inside HTML attributes (src, href, cssurl, poster, data-*, background-image, url())
+        before_match = text[:match_pos].lower()
+        after_match = text[match_pos:].lower()
+        
+        # Check for attribute contexts
+        attr_patterns = [
+            r'src\s*=\s*["\']?[^"\'>\s]*$',
+            r'href\s*=\s*["\']?[^"\'>\s]*$',
+            r'cssurl\s*=\s*["\']?[^"\'>\s]*$',
+            r'poster\s*=\s*["\']?[^"\'>\s]*$',
+            r'data-[a-z-]+\s*=\s*["\']?[^"\'>\s]*$',
+            r'background-image\s*:\s*url\(["\']?[^"\')\s]*$',
+            r'url\(["\']?[^"\')\s]*$',
+        ]
+        
+        for pattern in attr_patterns:
+            if re.search(pattern, before_match):
+                # Check if we're still inside the attribute value
+                if after_match and not re.match(r'^[^"\'>\s)]*["\'\s>)]', after_match):
+                    continue
+                return True
+        
+        # Check if we're inside an HTML tag
+        last_open = before_match.rfind('<')
+        last_close = before_match.rfind('>')
+        if last_open > last_close:
+            # We're inside a tag
+            next_close = after_match.find('>')
+            if next_close != -1:
+                return True
+        
+        # Check for protocol patterns at the start
+        if re.search(r'(?:^|["\'\s(])(https?://|ftp://|//)$', before_match):
+            return True
+        
+        return False
+
     def contains_technical_html(self, text):
         raw_text = self.normalize_text(text)
         if not raw_text:
@@ -669,7 +708,7 @@ class SpellCheckerApp:
         self.progress_bar.config(maximum=max(total_rows, 1), value=0)
 
         col_ru, col_ua = self.resolve_columns_for_file(df.columns, preferred_ru, preferred_ua)
-        errors_col_name = self.get_existing_or_create_column(df, 'Помилки перекладу')
+        errors_col_name = self.get_existing_or_create_column(df, 'Помилки')
         status_col_name = self.get_existing_or_create_column(df, 'Статус')
         checked_ru_col_name = self.get_existing_or_create_column(df, f'{col_ru}_checked')
         checked_ua_col_name = self.get_existing_or_create_column(df, f'{col_ua}_checked')
@@ -705,8 +744,8 @@ class SpellCheckerApp:
             ru_has_chinese = self.contains_chinese(text_ru)
             ua_has_chinese = self.contains_chinese(text_ua)
 
+            # Track technical HTML for statistics, but don't add to status
             if ru_has_technical or ua_has_technical:
-                row_statuses.append("Технічний HTML")
                 rows_with_technical_html.add(i)
             if ru_has_chinese or ua_has_chinese:
                 row_statuses.append("Китайський текст")
@@ -752,19 +791,34 @@ class SpellCheckerApp:
 
             text_ua_lower = text_ua.lower()
             for blacklisted_term in blacklist:
-                if blacklisted_term in text_ua_lower:
-                    idx = text_ua_lower.find(blacklisted_term)
-                    start = max(0, idx - 30)
-                    end = min(len(text_ua), idx + len(blacklisted_term) + 30)
-                    context = text_ua[start:end].strip()
-                    if start > 0:
-                        context = "..." + context
-                    if end < len(text_ua):
-                        context = context + "..."
-                    row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\"")
-                    row_statuses.append("Заборонений термін")
-                    rows_with_blacklist.add(i)
-                    rows_with_errors.add(i)
+                # Find all occurrences of the term
+                idx = 0
+                found_in_visible_text = False
+                while idx < len(text_ua_lower):
+                    idx = text_ua_lower.find(blacklisted_term, idx)
+                    if idx == -1:
+                        break
+                    
+                    # Check if this match is in technical HTML context
+                    if not self.is_in_technical_context(text_ua, idx):
+                        # Match is in visible text - report as error
+                        start = max(0, idx - 30)
+                        end = min(len(text_ua), idx + len(blacklisted_term) + 30)
+                        context = text_ua[start:end].strip()
+                        if start > 0:
+                            context = "..." + context
+                        if end < len(text_ua):
+                            context = context + "..."
+                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\"")
+                        row_statuses.append("Заборонений термін")
+                        rows_with_blacklist.add(i)
+                        rows_with_errors.add(i)
+                        found_in_visible_text = True
+                        break
+                    
+                    idx += len(blacklisted_term)
+                
+                if found_in_visible_text:
                     break
 
             if not html_only_mode:
@@ -787,11 +841,12 @@ class SpellCheckerApp:
             df.at[i, errors_col_name] = "\n".join(row_errors)
             df.at[i, checked_ru_col_name] = formatted_ru_text
             df.at[i, checked_ua_col_name] = formatted_ua_text
+            
+            # Compose status: only include actual error statuses, exclude technical info
+            # Priority: real errors first
             if row_statuses:
                 df.at[i, status_col_name] = self.compose_status(row_statuses)
-            elif row_errors:
-                df.at[i, status_col_name] = "Потрібен переклад"
-            else:
+            elif not row_errors:
                 df.at[i, status_col_name] = "OK"
                 rows_ok.add(i)
 
@@ -803,18 +858,55 @@ class SpellCheckerApp:
         save_path = f"{save_base}_checked{ext}"
 
         self.lbl_progress_status.config(text=f"Збереження: {os.path.basename(save_path)}")
+        
+        # Reorder columns: keep original columns first, then add new columns at the end
+        # in order: Помилки, {RU}_checked, {UA}_checked, Статус
+        original_cols = [col for col in df.columns if col not in [errors_col_name, status_col_name, checked_ru_col_name, checked_ua_col_name]]
+        new_column_order = original_cols + [errors_col_name, checked_ru_col_name, checked_ua_col_name, status_col_name]
+        df = df[new_column_order]
+        
         wb = Workbook()
         ws = wb.active
         for r in dataframe_to_rows(df, index=False, header=True):
             ws.append(r)
 
+        # Apply formatting to entire table
+        from openpyxl.styles import Font, Alignment
+        
+        # Format header row (row 1)
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+        ws.row_dimensions[1].height = 30
+        
+        # Format all data rows
+        for row_idx in range(2, ws.max_row + 1):
+            ws.row_dimensions[row_idx].height = 15
+            for cell in ws[row_idx]:
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+        # Apply highlighting only to _checked columns
         yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
         red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
+        
+        # Find column indices for checked columns
+        checked_ru_col_idx = None
+        checked_ua_col_idx = None
+        for idx, col in enumerate(ws[1], start=1):
+            if col.value == checked_ru_col_name:
+                checked_ru_col_idx = idx
+            elif col.value == checked_ua_col_name:
+                checked_ua_col_idx = idx
 
         for row_idx in rows_with_errors:
             fill_to_use = red_fill if row_idx in rows_with_language_mismatch else yellow_fill
-            for cell in ws[row_idx + 2]:
-                cell.fill = fill_to_use
+            excel_row_idx = row_idx + 2  # +2 because Excel is 1-based and we have header
+            
+            # Only highlight the _checked cells
+            if checked_ru_col_idx:
+                ws.cell(row=excel_row_idx, column=checked_ru_col_idx).fill = fill_to_use
+            if checked_ua_col_idx:
+                ws.cell(row=excel_row_idx, column=checked_ua_col_idx).fill = fill_to_use
 
         wb.save(save_path)
         self.progress_bar['value'] = total_rows
