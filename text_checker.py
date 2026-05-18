@@ -424,6 +424,7 @@ class SpellCheckerApp:
         after_match = text[match_pos:].lower()
         
         # Check for attribute contexts
+        # These patterns check if we're right after an attribute assignment or url( function
         attr_patterns = [
             r'src\s*=\s*["\']?[^"\'>\s]*$',
             r'href\s*=\s*["\']?[^"\'>\s]*$',
@@ -432,17 +433,30 @@ class SpellCheckerApp:
             r'data-[a-z-]+\s*=\s*["\']?[^"\'>\s]*$',
             r'background-image\s*:\s*url\(["\']?[^"\')\s]*$',
             r'url\(["\']?[^"\')\s]*$',
+            r'background\s*:\s*url\(["\']?[^"\')\s]*$',
+            r'content\s*:\s*url\(["\']?[^"\')\s]*$',
         ]
         
         for pattern in attr_patterns:
             if re.search(pattern, before_match):
                 # We found an attribute pattern before the match position
-                # Check if we're still inside the attribute value by looking for closing quote/bracket
-                if after_match and re.match(r'^[^"\'>\s)]*["\'\s>)]', after_match):
-                    # Found proper closing, so we're inside the attribute
+                # This indicates we're inside a URL or attribute value
+                
+                # Check if the match looks like a URL continuation (allowing uppercase, query params, fragments, etc.)
+                # This is the primary check for URL-like content
+                if re.match(r'^https?://[a-zA-Z0-9._/\-?#&=+%@]+', after_match):
+                    # Looks like a valid URL - we're in technical context
                     return True
-                elif not after_match:
-                    # End of string, likely inside attribute
+                
+                # Secondary check: if we're continuing inside an attribute value
+                # (no immediate whitespace or new tag start) and not at end of string
+                # This handles edge cases where URL detection above might be too strict
+                if after_match and not re.match(r'^[\s<]', after_match):
+                    # No immediate whitespace or tag start, likely still in the attribute
+                    return True
+                
+                # End of string after finding an attribute pattern
+                if not after_match:
                     return True
         
         # Check if we're inside an HTML tag
