@@ -441,15 +441,21 @@ class SpellCheckerApp:
             if re.search(pattern, before_match):
                 # We found an attribute pattern before the match position
                 # This indicates we're inside a URL or attribute value
-                # The match must look like a URL continuation (starts with valid URL characters)
-                if re.match(r'^https?://[a-z0-9._/-]+', after_match):
-                    # Looks like a URL - we're in technical context
+                
+                # Check if the match looks like a URL continuation (allowing uppercase, query params, fragments, etc.)
+                # This is the primary check for URL-like content
+                if re.match(r'^https?://[a-zA-Z0-9._/\-?#&=+%@]+', after_match):
+                    # Looks like a valid URL - we're in technical context
                     return True
-                # Also check if we're continuing inside an attribute (no immediate whitespace or new tag start)
-                if not re.match(r'^[\s<]', after_match):
+                
+                # Secondary check: if we're continuing inside an attribute value
+                # (no immediate whitespace or new tag start) and not at end of string
+                # This handles edge cases where URL detection above might be too strict
+                if after_match and not re.match(r'^[\s<]', after_match):
                     # No immediate whitespace or tag start, likely still in the attribute
                     return True
-                # End of string
+                
+                # End of string after finding an attribute pattern
                 if not after_match:
                     return True
         
