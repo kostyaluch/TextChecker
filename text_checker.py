@@ -436,10 +436,14 @@ class SpellCheckerApp:
         
         for pattern in attr_patterns:
             if re.search(pattern, before_match):
-                # Check if we're still inside the attribute value
-                if after_match and not re.match(r'^[^"\'>\s)]*["\'\s>)]', after_match):
-                    continue
-                return True
+                # We found an attribute pattern before the match position
+                # Check if we're still inside the attribute value by looking for closing quote/bracket
+                if after_match and re.match(r'^[^"\'>\s)]*["\'\s>)]', after_match):
+                    # Found proper closing, so we're inside the attribute
+                    return True
+                elif not after_match:
+                    # End of string, likely inside attribute
+                    return True
         
         # Check if we're inside an HTML tag
         last_open = before_match.rfind('<')
@@ -789,6 +793,8 @@ class SpellCheckerApp:
                     row_statuses.append("Підозріло короткий опис")
                     rows_with_short_desc.add(i)
 
+            # Check blacklist terms in UA text
+            # Note: Only report first blacklisted term found (intentional - avoids overwhelming with multiple violations)
             text_ua_lower = text_ua.lower()
             for blacklisted_term in blacklist:
                 # Find all occurrences of the term
@@ -846,7 +852,7 @@ class SpellCheckerApp:
             # Priority: real errors first
             if row_statuses:
                 df.at[i, status_col_name] = self.compose_status(row_statuses)
-            elif not row_errors:
+            else:
                 df.at[i, status_col_name] = "OK"
                 rows_ok.add(i)
 
