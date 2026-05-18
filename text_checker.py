@@ -115,7 +115,7 @@ class TextEditor(Toplevel):
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"Аналізатор Перекладу Описів {APP_VERSION}")
+        self.root.title(f"TextChecker {APP_VERSION}")
         self.root.geometry("980x700")
         self.root.minsize(920, 640)
         self.style = ttk.Style(self.root)
@@ -188,7 +188,7 @@ class SpellCheckerApp:
             print(f"Warning: Could not apply custom checkbox styling: {e}")
 
     def create_widgets(self):
-        ttk.Label(self.root, text=f"Аналізатор Перекладу Описів {APP_VERSION}", style='Title.TLabel').pack(
+        ttk.Label(self.root, text=f"TextChecker {APP_VERSION}", style='Title.TLabel').pack(
             anchor='w', padx=14, pady=(12, 4)
         )
 
