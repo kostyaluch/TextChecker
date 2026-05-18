@@ -424,6 +424,7 @@ class SpellCheckerApp:
         after_match = text[match_pos:].lower()
         
         # Check for attribute contexts
+        # These patterns check if we're right after an attribute assignment or url( function
         attr_patterns = [
             r'src\s*=\s*["\']?[^"\'>\s]*$',
             r'href\s*=\s*["\']?[^"\'>\s]*$',
@@ -432,17 +433,24 @@ class SpellCheckerApp:
             r'data-[a-z-]+\s*=\s*["\']?[^"\'>\s]*$',
             r'background-image\s*:\s*url\(["\']?[^"\')\s]*$',
             r'url\(["\']?[^"\')\s]*$',
+            r'background\s*:\s*url\(["\']?[^"\')\s]*$',
+            r'content\s*:\s*url\(["\']?[^"\')\s]*$',
         ]
         
         for pattern in attr_patterns:
             if re.search(pattern, before_match):
                 # We found an attribute pattern before the match position
-                # Check if we're still inside the attribute value by looking for closing quote/bracket
-                if after_match and re.match(r'^[^"\'>\s)]*["\'\s>)]', after_match):
-                    # Found proper closing, so we're inside the attribute
+                # This indicates we're inside a URL or attribute value
+                # The match must look like a URL continuation (starts with valid URL characters)
+                if re.match(r'^https?://[a-z0-9._/-]+', after_match):
+                    # Looks like a URL - we're in technical context
                     return True
-                elif not after_match:
-                    # End of string, likely inside attribute
+                # Also check if we're continuing inside an attribute (no immediate whitespace or new tag start)
+                if not re.match(r'^[\s<]', after_match):
+                    # No immediate whitespace or tag start, likely still in the attribute
+                    return True
+                # End of string
+                if not after_match:
                     return True
         
         # Check if we're inside an HTML tag
