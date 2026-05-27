@@ -7,11 +7,18 @@ import sys
 import subprocess
 import time
 import re
+import csv
 from html import unescape
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+# Dictionary file paths - CSV format
+RULES_FILE_CSV = 'translation_rules.csv'
+IGNORE_FILE_CSV = 'ignore_rules.csv'
+BLACKLIST_FILE_CSV = 'blacklist_terms.csv'
+
+# Legacy TXT file paths (for backward compatibility)
 RULES_FILE = 'translation_rules.txt'
 IGNORE_FILE = 'ignore_rules.txt'
 BLACKLIST_FILE = 'blacklist_terms.txt'
@@ -52,6 +59,153 @@ e-mail:
 копія
 репліка
 """
+
+# CSV default headers and sample data
+DEFAULT_RULES_CSV_HEADER = ['російський_корінь', 'українські_корені', 'виключення', 'тип', 'коментар']
+DEFAULT_IGNORES_CSV_HEADER = ['фраза', 'категорія', 'коментар']
+DEFAULT_BLACKLIST_CSV_HEADER = ['термін', 'категорія', 'коментар']
+
+
+def migrate_txt_to_csv():
+    """Migrate old TXT dictionaries to CSV format if they exist."""
+    
+    # Migrate translation rules
+    if os.path.exists(RULES_FILE) and not os.path.exists(RULES_FILE_CSV):
+        print(f"Міграція {RULES_FILE} → {RULES_FILE_CSV}...")
+        rules_data = []
+        with open(RULES_FILE, 'r', encoding='utf-8') as f:
+            current_comment = ''
+            for line in f:
+                line = line.rstrip('\n')
+                if line.strip().startswith('#'):
+                    # Extract comment
+                    current_comment = line.strip('#').strip()
+                elif '=' in line:
+                    # Parse rule
+                    parts = line.split('#', 1)
+                    rule_part = parts[0].strip()
+                    inline_comment = parts[1].strip() if len(parts) > 1 else ''
+                    
+                    if '=' in rule_part:
+                        ru, ua_list = rule_part.split('=', 1)
+                        ru_stem = ru.strip()
+                        ua_stems = ua_list.strip()
+                        comment = inline_comment or current_comment
+                        
+                        rules_data.append({
+                            'російський_корінь': ru_stem,
+                            'українські_корені': ua_stems,
+                            'виключення': '',
+                            'тип': '',
+                            'коментар': comment
+                        })
+                        current_comment = ''  # Reset after use
+        
+        # Write CSV
+        with open(RULES_FILE_CSV, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=DEFAULT_RULES_CSV_HEADER)
+            writer.writeheader()
+            writer.writerows(rules_data)
+        print(f"✓ Міграцію завершено: {len(rules_data)} правил")
+    
+    # Migrate ignore rules
+    if os.path.exists(IGNORE_FILE) and not os.path.exists(IGNORE_FILE_CSV):
+        print(f"Міграція {IGNORE_FILE} → {IGNORE_FILE_CSV}...")
+        ignores_data = []
+        with open(IGNORE_FILE, 'r', encoding='utf-8') as f:
+            current_comment = ''
+            for line in f:
+                line = line.rstrip('\n')
+                if line.strip().startswith('#'):
+                    current_comment = line.strip('#').strip()
+                elif line.strip():
+                    parts = line.split('#', 1)
+                    phrase = parts[0].strip()
+                    inline_comment = parts[1].strip() if len(parts) > 1 else ''
+                    comment = inline_comment or current_comment
+                    
+                    ignores_data.append({
+                        'фраза': phrase,
+                        'категорія': '',
+                        'коментар': comment
+                    })
+                    current_comment = ''
+        
+        with open(IGNORE_FILE_CSV, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=DEFAULT_IGNORES_CSV_HEADER)
+            writer.writeheader()
+            writer.writerows(ignores_data)
+        print(f"✓ Міграцію завершено: {len(ignores_data)} фраз")
+    
+    # Migrate blacklist
+    if os.path.exists(BLACKLIST_FILE) and not os.path.exists(BLACKLIST_FILE_CSV):
+        print(f"Міграція {BLACKLIST_FILE} → {BLACKLIST_FILE_CSV}...")
+        blacklist_data = []
+        with open(BLACKLIST_FILE, 'r', encoding='utf-8') as f:
+            current_comment = ''
+            for line in f:
+                line = line.rstrip('\n')
+                if line.strip().startswith('#'):
+                    current_comment = line.strip('#').strip()
+                elif line.strip():
+                    parts = line.split('#', 1)
+                    term = parts[0].strip()
+                    inline_comment = parts[1].strip() if len(parts) > 1 else ''
+                    comment = inline_comment or current_comment
+                    
+                    blacklist_data.append({
+                        'термін': term,
+                        'категорія': '',
+                        'коментар': comment
+                    })
+                    current_comment = ''
+        
+        with open(BLACKLIST_FILE_CSV, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=DEFAULT_BLACKLIST_CSV_HEADER)
+            writer.writeheader()
+            writer.writerows(blacklist_data)
+        print(f"✓ Міграцію завершено: {len(blacklist_data)} термінів")
+
+
+def create_default_csv_files():
+    """Create default CSV files if they don't exist."""
+    
+    # Create default translation_rules.csv
+    if not os.path.exists(RULES_FILE_CSV):
+        with open(RULES_FILE_CSV, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=DEFAULT_RULES_CSV_HEADER)
+            writer.writeheader()
+            # Add sample data
+            writer.writerow({
+                'російський_корінь': 'питани',
+                'українські_корені': 'харчуванн',
+                'виключення': 'збалансоване харчування,дитяче харчування,здорове харчування',
+                'тип': 'Помилка перекладу',
+                'коментар': 'Питание (електричне) → живлення, а не харчування'
+            })
+    
+    # Create default ignore_rules.csv
+    if not os.path.exists(IGNORE_FILE_CSV):
+        with open(IGNORE_FILE_CSV, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=DEFAULT_IGNORES_CSV_HEADER)
+            writer.writeheader()
+            writer.writerow({
+                'фраза': 'збалансоване харчування',
+                'категорія': 'Харчування',
+                'коментар': 'Допустимий контекст для слова "харчування"'
+            })
+    
+    # Create default blacklist_terms.csv
+    if not os.path.exists(BLACKLIST_FILE_CSV):
+        with open(BLACKLIST_FILE_CSV, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=DEFAULT_BLACKLIST_CSV_HEADER)
+            writer.writeheader()
+            writer.writerow({
+                'термін': 'www.',
+                'категорія': 'URL',
+                'коментар': 'Заборонені веб-адреси в описах'
+            })
+
 
 UKRAINIAN_MARKERS = {
     'і', 'та', 'це', 'для', 'що', 'від', 'під', 'при', 'через', 'згідно', 'наявність',
