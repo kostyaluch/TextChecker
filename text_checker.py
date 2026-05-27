@@ -63,7 +63,7 @@ e-mail:
 # CSV default headers and sample data
 DEFAULT_RULES_CSV_HEADER = ['російський_корінь', 'українські_корені', 'виключення', 'тип', 'коментар']
 DEFAULT_IGNORES_CSV_HEADER = ['фраза', 'категорія', 'коментар']
-DEFAULT_BLACKLIST_CSV_HEADER = ['термін', 'категорія', 'коментар']
+DEFAULT_BLACKLIST_CSV_HEADER = ['термін', 'виключення', 'дія', 'категорія', 'коментар']
 
 
 def migrate_txt_to_csv():
@@ -155,6 +155,8 @@ def migrate_txt_to_csv():
                     
                     blacklist_data.append({
                         'термін': term,
+                        'виключення': '',
+                        'дія': 'Видалити',  # За замовчуванням - як зараз працює
                         'категорія': '',
                         'коментар': comment
                     })
@@ -1195,7 +1197,10 @@ class SpellCheckerApp:
         return ignores
 
     def parse_blacklist(self):
-        """Parse blacklist from CSV or TXT format."""
+        """
+        Parse blacklist from CSV or TXT format.
+        Returns: list of dicts with 'term', 'exceptions', 'action' keys
+        """
         blacklist = []
         
         # Try CSV first (new format)
@@ -1206,18 +1211,30 @@ class SpellCheckerApp:
                     for row in reader:
                         term = row.get('термін', '').strip()
                         if term:
-                            blacklist.append(term.lower())
+                            exceptions_str = row.get('виключення', '').strip()
+                            exceptions = [e.strip().lower() for e in exceptions_str.split(',') if e.strip()]
+                            action = row.get('дія', 'Видалити').strip()
+                            
+                            blacklist.append({
+                                'term': term.lower(),
+                                'exceptions': exceptions,
+                                'action': action
+                            })
                 return blacklist
             except Exception as e:
                 print(f"Помилка читання CSV: {e}, перемикаємось на TXT")
         
-        # Fallback to TXT format (legacy)
+        # Fallback to TXT format (legacy) - without exceptions and with default action
         if os.path.exists(BLACKLIST_FILE):
             with open(BLACKLIST_FILE, 'r', encoding='utf-8') as f:
                 for line in f:
                     line = line.split('#')[0].strip()
                     if line:
-                        blacklist.append(line.lower())
+                        blacklist.append({
+                            'term': line.lower(),
+                            'exceptions': [],
+                            'action': 'Видалити'
+                        })
         
         return blacklist
 
@@ -1363,8 +1380,30 @@ class SpellCheckerApp:
         return ""
 
     def sentence_contains_blacklist(self, sentence, blacklist):
+        """
+        Check if sentence contains blacklist term.
+        Args:
+            sentence: text to check
+            blacklist: list of dicts with 'term', 'exceptions', 'action' keys
+        Returns:
+            dict with 'found' (bool), 'term' (str), 'action' (str) or None if no match
+        """
         sentence_lower = sentence.lower()
-        return any(term in sentence_lower for term in blacklist)
+        for entry in blacklist:
+            term = entry['term']
+            if term in sentence_lower:
+                # Check exceptions
+                exceptions = entry.get('exceptions', [])
+                is_exception = any(exc in sentence_lower for exc in exceptions if exc)
+                
+                if not is_exception:
+                    return {
+                        'found': True,
+                        'term': term,
+                        'action': entry.get('action', 'Видалити')
+                    }
+        
+        return None
 
     def convert_markdown_bold_to_html(self, text):
         return re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
@@ -1477,7 +1516,9 @@ class SpellCheckerApp:
                 current_list_signatures = set()
 
         for paragraph_html, paragraph_text in paragraphs:
-            if self.sentence_contains_blacklist(paragraph_text, blacklist):
+            blacklist_match = self.sentence_contains_blacklist(paragraph_text, blacklist)
+            # Only skip (delete) if action is "Видалити"
+            if blacklist_match and blacklist_match.get('action') == 'Видалити':
                 continue
             if self.contains_chinese(paragraph_text):
                 continue
@@ -1689,7 +1730,16 @@ class SpellCheckerApp:
             # Check blacklist terms in UA text
             # Note: Only report first blacklisted term found (intentional - avoids overwhelming with multiple violations)
             text_ua_lower = text_ua.lower()
-            for blacklisted_term in blacklist:
+            for blacklist_entry in blacklist:
+                blacklisted_term = blacklist_entry['term']
+                exceptions = blacklist_entry.get('exceptions', [])
+                action = blacklist_entry.get('action', 'Видалити')
+                
+                # Check if any exception applies to the whole text
+                has_exception = any(exc in text_ua_lower for exc in exceptions if exc)
+                if has_exception:
+                    continue  # Skip this term entirely if exception found
+                
                 # Find all occurrences of the term
                 idx = 0
                 found_in_visible_text = False
@@ -1708,7 +1758,13 @@ class SpellCheckerApp:
                             context = "..." + context
                         if end < len(text_ua):
                             context = context + "..."
-                        row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\"")
+                        
+                        # Different message based on action
+                        if action == 'Видалити':
+                            row_errors.append(f"[ЗАБОРОНЕНИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\" (речення буде видалено)")
+                        else:  # Підсвітити
+                            row_errors.append(f"[ПІДОЗРІЛИЙ ТЕРМІН] Знайдено '{blacklisted_term}' у тексті: \"{context}\" (потребує перевірки)")
+                        
                         row_statuses.append("Заборонений термін")
                         rows_with_blacklist.add(i)
                         rows_with_errors.add(i)
