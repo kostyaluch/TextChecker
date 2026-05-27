@@ -172,11 +172,14 @@ class DictionaryManager(Toplevel):
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill='both', expand=True, pady=(0, 10))
         
-        # Create tabs for each dictionary
+        # Create tabs for each dictionary and maintain tab-to-key mapping
         self.text_widgets = {}
-        for key, dict_info in self.dictionaries.items():
+        self.tab_to_key = {}  # Map tab index to dictionary key
+        
+        for idx, (key, dict_info) in enumerate(self.dictionaries.items()):
             tab_frame = ttk.Frame(self.notebook, padding=5)
             self.notebook.add(tab_frame, text=dict_info['title'])
+            self.tab_to_key[idx] = key  # Store explicit mapping
             
             # Text widget with scrollbar
             text_widget = tk.Text(tab_frame, wrap='word', font=('Consolas', 10), undo=True)
@@ -228,8 +231,12 @@ class DictionaryManager(Toplevel):
                 text_widget = self.text_widgets[key]
                 content = text_widget.get('1.0', tk.END).strip()
                 
+                # Only add newline if content doesn't already end with one
+                if content and not content.endswith('\n'):
+                    content += '\n'
+                
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content + "\n")
+                    f.write(content)
             
             self.update_statistics()
             messagebox.showinfo("Успіх", "Всі словники успішно збережено!", parent=self)
@@ -294,10 +301,9 @@ class DictionaryManager(Toplevel):
         # Clear previous highlights
         self.clear_highlights()
         
-        # Search in current tab
+        # Search in current tab using explicit mapping
         current_tab_index = self.notebook.index(self.notebook.select())
-        keys = list(self.dictionaries.keys())
-        current_key = keys[current_tab_index]
+        current_key = self.tab_to_key[current_tab_index]
         text_widget = self.text_widgets[current_key]
         
         # Highlight matches
@@ -316,23 +322,24 @@ class DictionaryManager(Toplevel):
         
         # Search and highlight
         start_pos = '1.0'
-        match_count = 0
+        first_match = None
         
         while True:
             start_pos = text_widget.search(search_term, start_pos, tk.END, nocase=True)
             if not start_pos:
                 break
             
+            # Store the first match for scrolling
+            if first_match is None:
+                first_match = start_pos
+            
             end_pos = f"{start_pos}+{len(search_term)}c"
             text_widget.tag_add('search_highlight', start_pos, end_pos)
             start_pos = end_pos
-            match_count += 1
         
         # Scroll to first match if found
-        if match_count > 0:
-            first_match = text_widget.search(search_term, '1.0', tk.END, nocase=True)
-            if first_match:
-                text_widget.see(first_match)
+        if first_match:
+            text_widget.see(first_match)
                 
     def clear_highlights(self):
         """Clear all search highlights"""
