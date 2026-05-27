@@ -558,20 +558,33 @@ class SpellCheckerApp:
                 return {'type': 'labeled_value', 'label': label, 'value': value, 'text': paragraph_text}
             return {'type': 'heading', 'label': label, 'text': paragraph_text}
 
+        # Check for dash-prefixed items first, strip the bullet marker, then re-classify
+        # Supporting various bullet markers: -, •, *, —, en-dash (\u2013), em-dash (\u2014)
+        bullet_match = re.match(r'^[\-\u2022\*\u2013\u2014]\s+(.+)$', paragraph_text)
+        if bullet_match:
+            # Strip the bullet marker and get the content
+            content_after_bullet = bullet_match.group(1).strip()
+            
+            # Check if the content after the bullet has a colon pattern (label: value)
+            colon_match_after_bullet = re.match(r'^([^:]{1,80}):\s*(.+)$', content_after_bullet)
+            if colon_match_after_bullet:
+                label = self.normalize_label(colon_match_after_bullet.group(1))
+                value = colon_match_after_bullet.group(2).strip()
+                if label and value:
+                    # This is a dash-prefixed labeled item: "- Label: value"
+                    return {'type': 'list_item_labeled', 'label': label, 'value': value, 'text': paragraph_text}
+            
+            # If no colon, it's a simple list item: "- simple text"
+            if content_after_bullet:
+                return {'type': 'list_item', 'value': content_after_bullet, 'text': paragraph_text}
+
+        # Check for labeled items without dash prefix
         colon_match = re.match(r'^([^:]{1,80}):\s*(.+)$', paragraph_text)
         if colon_match:
             label = self.normalize_label(colon_match.group(1))
             value = colon_match.group(2).strip()
             if label and value:
                 return {'type': 'plain_labeled_value', 'label': label, 'value': value, 'text': paragraph_text}
-
-        # Check for dash-prefixed list items (-, •, *, —, en-dash, em-dash)
-        # Supporting various bullet markers and Unicode variants
-        bullet_match = re.match(r'^[\-\u2022\*\u2013\u2014]\s+(.+)$', paragraph_text)
-        if bullet_match:
-            value = bullet_match.group(1).strip()
-            if value:
-                return {'type': 'list_item', 'value': value, 'text': paragraph_text}
 
         return {'type': 'text', 'text': paragraph_text}
 
@@ -633,7 +646,7 @@ class SpellCheckerApp:
                 result.append(f"<p><strong>{item['label']}:</strong></p>")
                 continue
 
-            if item_type in ('labeled_value', 'plain_labeled_value'):
+            if item_type in ('labeled_value', 'plain_labeled_value', 'list_item_labeled'):
                 label = item['label']
                 value = self.normalize_common_text_issues(item['value'])
 
