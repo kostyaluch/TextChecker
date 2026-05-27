@@ -560,7 +560,8 @@ class SpellCheckerApp:
 
         # Check for dash-prefixed items first, strip the bullet marker, then re-classify
         # Supporting various bullet markers: -, •, *, —, en-dash (\u2013), em-dash (\u2014)
-        bullet_match = re.match(r'^[\-\u2022\*\u2013\u2014]\s+(.+)$', paragraph_text)
+        # Note: hyphen placed at end of character class to avoid interpretation as range operator
+        bullet_match = re.match(r'^[\u2022\*\u2013\u2014\-]\s+(.+)$', paragraph_text)
         if bullet_match:
             # Strip the bullet marker and get the content
             content_after_bullet = bullet_match.group(1).strip()
@@ -672,7 +673,8 @@ class SpellCheckerApp:
                     continue
                 
                 # Deduplication for plain list items (by value only)
-                item_signature = ('', value)  # Empty label for plain list items
+                # Using None as label placeholder to distinguish from labeled items
+                item_signature = (None, value)
                 if item_signature not in current_list_signatures:
                     current_list_items.append(f"<li>{value}</li>")
                     current_list_signatures.add(item_signature)
