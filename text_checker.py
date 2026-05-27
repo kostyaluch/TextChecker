@@ -231,8 +231,8 @@ class DictionaryManager(Toplevel):
                 text_widget = self.text_widgets[key]
                 content = text_widget.get('1.0', tk.END).strip()
                 
-                # Only add newline if content doesn't already end with one
-                if content and not content.endswith('\n'):
+                # Add newline at end if content exists
+                if content:
                     content += '\n'
                 
                 with open(file_path, 'w', encoding='utf-8') as f:
