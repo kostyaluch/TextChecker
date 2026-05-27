@@ -558,6 +558,28 @@ class SpellCheckerApp:
                 return {'type': 'labeled_value', 'label': label, 'value': value, 'text': paragraph_text}
             return {'type': 'heading', 'label': label, 'text': paragraph_text}
 
+        # Check for dash-prefixed items first, strip the bullet marker, then re-classify
+        # Supporting various bullet markers: -, •, *, —, en-dash (\u2013), em-dash (\u2014)
+        # Note: hyphen escaped explicitly for clarity
+        bullet_match = re.match(r'^[\u2022\*\u2013\u2014\\\-]\s+(.+)$', paragraph_text)
+        if bullet_match:
+            # Strip the bullet marker and get the content
+            content_after_bullet = bullet_match.group(1).strip()
+            
+            # Check if the content after the bullet has a colon pattern (label: value)
+            colon_match_after_bullet = re.match(r'^([^:]{1,80}):\s*(.+)$', content_after_bullet)
+            if colon_match_after_bullet:
+                label = self.normalize_label(colon_match_after_bullet.group(1))
+                value = colon_match_after_bullet.group(2).strip()
+                if label and value:
+                    # This is a dash-prefixed labeled item: "- Label: value"
+                    return {'type': 'list_item_labeled', 'label': label, 'value': value, 'text': paragraph_text}
+            
+            # If no colon, it's a simple list item: "- simple text"
+            if content_after_bullet:
+                return {'type': 'list_item', 'value': content_after_bullet, 'text': paragraph_text}
+
+        # Check for labeled items without dash prefix
         colon_match = re.match(r'^([^:]{1,80}):\s*(.+)$', paragraph_text)
         if colon_match:
             label = self.normalize_label(colon_match.group(1))
@@ -625,7 +647,7 @@ class SpellCheckerApp:
                 result.append(f"<p><strong>{item['label']}:</strong></p>")
                 continue
 
-            if item_type in ('labeled_value', 'plain_labeled_value'):
+            if item_type in ('labeled_value', 'plain_labeled_value', 'list_item_labeled'):
                 label = item['label']
                 value = self.normalize_common_text_issues(item['value'])
 
@@ -641,6 +663,20 @@ class SpellCheckerApp:
                 item_signature = (label, value)
                 if item_signature not in current_list_signatures:
                     current_list_items.append(f"<li><strong>{label}:</strong> {value}</li>")
+                    current_list_signatures.add(item_signature)
+                continue
+
+            if item_type == 'list_item':
+                value = self.normalize_common_text_issues(item['value'])
+                
+                if self.contains_chinese(value):
+                    continue
+                
+                # Deduplication for plain list items (by value only)
+                # Using None as label placeholder to distinguish from labeled items
+                item_signature = (None, value)
+                if item_signature not in current_list_signatures:
+                    current_list_items.append(f"<li>{value}</li>")
                     current_list_signatures.add(item_signature)
                 continue
 
