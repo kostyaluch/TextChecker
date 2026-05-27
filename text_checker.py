@@ -506,6 +506,393 @@ class DictionaryManager(Toplevel):
         self.clear_highlights()
 
 
+class RowEditDialog(Toplevel):
+    """Dialog for adding/editing dictionary rows."""
+    
+    def __init__(self, parent, columns, values=None, title="Редагувати запис"):
+        super().__init__(parent)
+        self.transient(parent)
+        self.grab_set()
+        self.title(title)
+        self.geometry("700x400")
+        self.result = None
+        self.columns = columns
+        
+        # Create main frame
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Create entry fields for each column
+        self.entries = {}
+        for idx, col in enumerate(columns):
+            label = ttk.Label(main_frame, text=f"{col}:", font=('Segoe UI', 10, 'bold'))
+            label.grid(row=idx, column=0, sticky='w', pady=5, padx=5)
+            
+            # Use Text widget for multi-line support on larger fields
+            if col in ['коментар', 'виключення', 'українські_корені']:
+                text_widget = tk.Text(main_frame, height=3, wrap='word', font=('Consolas', 10))
+                text_widget.grid(row=idx, column=1, sticky='ew', pady=5, padx=5)
+                self.entries[col] = text_widget
+                
+                if values and col in values:
+                    text_widget.insert('1.0', values[col])
+            else:
+                entry = ttk.Entry(main_frame, font=('Consolas', 10))
+                entry.grid(row=idx, column=1, sticky='ew', pady=5, padx=5)
+                self.entries[col] = entry
+                
+                if values and col in values:
+                    entry.insert(0, values[col])
+        
+        main_frame.columnconfigure(1, weight=1)
+        
+        # Button frame
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.grid(row=len(columns), column=0, columnspan=2, pady=10, sticky='e')
+        
+        ttk.Button(btn_frame, text="Зберегти", command=self.save).pack(side='right', padx=5)
+        ttk.Button(btn_frame, text="Скасувати", command=self.destroy).pack(side='right')
+    
+    def save(self):
+        """Save the edited values."""
+        self.result = {}
+        for col, widget in self.entries.items():
+            if isinstance(widget, tk.Text):
+                self.result[col] = widget.get('1.0', tk.END).strip()
+            else:
+                self.result[col] = widget.get().strip()
+        self.destroy()
+
+
+class TableDictionaryManager(Toplevel):
+    """Tabular dictionary manager with CSV support."""
+    
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.transient(parent)
+        self.grab_set()
+        self.title("📚 Словники (Табличний формат)")
+        self.geometry("1100x650")
+        self.parent = parent
+        
+        # Dictionary configurations
+        self.dictionaries = {
+            'rules': {
+                'file': RULES_FILE_CSV,
+                'columns': DEFAULT_RULES_CSV_HEADER,
+                'title': '🔄 Помилки перекладу',
+                'data': []
+            },
+            'ignores': {
+                'file': IGNORE_FILE_CSV,
+                'columns': DEFAULT_IGNORES_CSV_HEADER,
+                'title': '✓ Винятки',
+                'data': []
+            },
+            'blacklist': {
+                'file': BLACKLIST_FILE_CSV,
+                'columns': DEFAULT_BLACKLIST_CSV_HEADER,
+                'title': '⛔ Чорний список',
+                'data': []
+            }
+        }
+        
+        self.create_widgets()
+        self.load_all_dictionaries()
+        self.update_statistics()
+        
+    def create_widgets(self):
+        """Create the table-based UI."""
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Statistics frame at the top
+        stats_frame = ttk.LabelFrame(main_frame, text="📊 Статистика", padding=5)
+        stats_frame.pack(fill='x', pady=(0, 10))
+        
+        self.lbl_stats = ttk.Label(stats_frame, text="Завантаження...", font=('Segoe UI', 9))
+        self.lbl_stats.pack(anchor='w', padx=5)
+        
+        # Search frame
+        search_frame = ttk.Frame(main_frame)
+        search_frame.pack(fill='x', pady=(0, 10))
+        
+        ttk.Label(search_frame, text="🔍 Пошук:", font=('Segoe UI', 9, 'bold')).pack(side='left', padx=5)
+        self.entry_search = ttk.Entry(search_frame, width=50)
+        self.entry_search.pack(side='left', padx=5, fill='x', expand=True)
+        self.entry_search.bind('<KeyRelease>', self.on_search)
+        
+        self.btn_clear_search = ttk.Button(search_frame, text="Очистити", command=self.clear_search)
+        self.btn_clear_search.pack(side='left', padx=5)
+        
+        # Notebook (tabs)
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill='both', expand=True, pady=(0, 10))
+        self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_changed)
+        
+        # Create tabs for each dictionary
+        self.trees = {}
+        self.tab_to_key = {}
+        
+        for idx, (key, dict_info) in enumerate(self.dictionaries.items()):
+            tab_frame = ttk.Frame(self.notebook, padding=5)
+            self.notebook.add(tab_frame, text=dict_info['title'])
+            self.tab_to_key[idx] = key
+            
+            # Create Treeview
+            tree_frame = ttk.Frame(tab_frame)
+            tree_frame.pack(fill='both', expand=True)
+            
+            columns = dict_info['columns']
+            tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='browse')
+            
+            # Configure column headings
+            for col in columns:
+                tree.heading(col, text=col, anchor='w')
+                # Set column widths based on content type
+                if col in ['російський_корінь', 'українські_корені', 'фраза', 'термін']:
+                    tree.column(col, width=150, anchor='w')
+                elif col in ['виключення', 'коментар']:
+                    tree.column(col, width=250, anchor='w')
+                else:
+                    tree.column(col, width=120, anchor='w')
+            
+            # Scrollbars
+            vsb = ttk.Scrollbar(tree_frame, orient='vertical', command=tree.yview)
+            hsb = ttk.Scrollbar(tree_frame, orient='horizontal', command=tree.xview)
+            tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            
+            tree.grid(row=0, column=0, sticky='nsew')
+            vsb.grid(row=0, column=1, sticky='ns')
+            hsb.grid(row=1, column=0, sticky='ew')
+            
+            tree_frame.columnconfigure(0, weight=1)
+            tree_frame.rowconfigure(0, weight=1)
+            
+            # Double-click to edit
+            tree.bind('<Double-1>', lambda e, k=key: self.edit_row(k))
+            
+            self.trees[key] = tree
+            
+            # Buttons for this tab
+            btn_frame = ttk.Frame(tab_frame)
+            btn_frame.pack(fill='x', pady=(5, 0))
+            
+            ttk.Button(btn_frame, text="➕ Додати", command=lambda k=key: self.add_row(k)).pack(side='left', padx=2)
+            ttk.Button(btn_frame, text="✏️ Редагувати", command=lambda k=key: self.edit_row(k)).pack(side='left', padx=2)
+            ttk.Button(btn_frame, text="🗑️ Видалити", command=lambda k=key: self.delete_row(k)).pack(side='left', padx=2)
+            ttk.Button(btn_frame, text="📤 Експорт в Excel", command=lambda k=key: self.export_to_excel(k)).pack(side='right', padx=2)
+        
+        # Bottom button frame
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill='x')
+        
+        self.btn_save_all = ttk.Button(btn_frame, text="💾 Зберегти всі", command=self.save_all)
+        self.btn_save_all.pack(side='left', padx=5)
+        
+        self.btn_reload = ttk.Button(btn_frame, text="🔄 Перезавантажити", command=self.reload_all)
+        self.btn_reload.pack(side='left', padx=5)
+        
+        self.btn_close = ttk.Button(btn_frame, text="Закрити", command=self.destroy)
+        self.btn_close.pack(side='right', padx=5)
+    
+    def load_all_dictionaries(self):
+        """Load content from all CSV dictionary files."""
+        for key, dict_info in self.dictionaries.items():
+            file_path = dict_info['file']
+            
+            # Ensure file exists
+            if not os.path.exists(file_path):
+                create_default_csv_files()
+            
+            # Load CSV
+            try:
+                with open(file_path, 'r', encoding='utf-8', newline='') as f:
+                    reader = csv.DictReader(f)
+                    dict_info['data'] = list(reader)
+            except Exception as e:
+                messagebox.showerror("Помилка", f"Не вдалося завантажити {file_path}:\n{e}", parent=self)
+                dict_info['data'] = []
+            
+            # Populate tree
+            self.populate_tree(key)
+    
+    def populate_tree(self, key):
+        """Populate a tree view with data."""
+        tree = self.trees[key]
+        dict_info = self.dictionaries[key]
+        
+        # Clear existing items
+        for item in tree.get_children():
+            tree.delete(item)
+        
+        # Add data
+        for row in dict_info['data']:
+            values = [row.get(col, '') for col in dict_info['columns']]
+            tree.insert('', 'end', values=values)
+    
+    def add_row(self, key):
+        """Add a new row to the dictionary."""
+        dict_info = self.dictionaries[key]
+        columns = dict_info['columns']
+        
+        dialog = RowEditDialog(self, columns, title=f"Додати запис - {dict_info['title']}")
+        self.wait_window(dialog)
+        
+        if dialog.result:
+            dict_info['data'].append(dialog.result)
+            self.populate_tree(key)
+            self.update_statistics()
+    
+    def edit_row(self, key):
+        """Edit selected row."""
+        tree = self.trees[key]
+        dict_info = self.dictionaries[key]
+        
+        selection = tree.selection()
+        if not selection:
+            messagebox.showwarning("Увага", "Виберіть рядок для редагування", parent=self)
+            return
+        
+        item = selection[0]
+        idx = tree.index(item)
+        current_values = dict_info['data'][idx]
+        
+        dialog = RowEditDialog(self, dict_info['columns'], current_values, 
+                               title=f"Редагувати запис - {dict_info['title']}")
+        self.wait_window(dialog)
+        
+        if dialog.result:
+            dict_info['data'][idx] = dialog.result
+            self.populate_tree(key)
+            self.update_statistics()
+    
+    def delete_row(self, key):
+        """Delete selected row."""
+        tree = self.trees[key]
+        dict_info = self.dictionaries[key]
+        
+        selection = tree.selection()
+        if not selection:
+            messagebox.showwarning("Увага", "Виберіть рядок для видалення", parent=self)
+            return
+        
+        response = messagebox.askyesno("Підтвердження", "Видалити вибраний запис?", parent=self)
+        if response:
+            item = selection[0]
+            idx = tree.index(item)
+            dict_info['data'].pop(idx)
+            self.populate_tree(key)
+            self.update_statistics()
+    
+    def export_to_excel(self, key):
+        """Export current dictionary to Excel."""
+        dict_info = self.dictionaries[key]
+        
+        file_path = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension='.xlsx',
+            filetypes=[("Excel files", "*.xlsx")],
+            initialfile=f"{key}_export.xlsx"
+        )
+        
+        if file_path:
+            try:
+                df = pd.DataFrame(dict_info['data'])
+                df.to_excel(file_path, index=False, engine='openpyxl')
+                messagebox.showinfo("Успіх", f"Експортовано в {file_path}", parent=self)
+            except Exception as e:
+                messagebox.showerror("Помилка", f"Не вдалося експортувати:\n{e}", parent=self)
+    
+    def save_all(self):
+        """Save all dictionaries to CSV files."""
+        try:
+            for key, dict_info in self.dictionaries.items():
+                file_path = dict_info['file']
+                
+                with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=dict_info['columns'])
+                    writer.writeheader()
+                    writer.writerows(dict_info['data'])
+            
+            self.update_statistics()
+            messagebox.showinfo("Успіх", "Всі словники успішно збережено!", parent=self)
+            
+            if hasattr(self.parent, 'log_message'):
+                self.parent.log_message("Словники оновлено через Табличний менеджер")
+                
+        except Exception as e:
+            messagebox.showerror("Помилка", f"Не вдалося зберегти словники:\n{e}", parent=self)
+    
+    def reload_all(self):
+        """Reload all dictionaries from CSV files."""
+        response = messagebox.askyesno(
+            "Підтвердження",
+            "Перезавантажити всі словники з файлів? Незбережені зміни будуть втрачені.",
+            parent=self
+        )
+        if response:
+            self.load_all_dictionaries()
+            self.update_statistics()
+            self.clear_search()
+    
+    def update_statistics(self):
+        """Update statistics display."""
+        stats = {}
+        total = 0
+        
+        for key, dict_info in self.dictionaries.items():
+            count = len(dict_info['data'])
+            stats[key] = count
+            total += count
+        
+        stats_text = (
+            f"Словник помилок: {stats['rules']} правил  |  "
+            f"Словник винятків: {stats['ignores']} фраз  |  "
+            f"Чорний список: {stats['blacklist']} термінів  |  "
+            f"Всього: {total} записів"
+        )
+        self.lbl_stats.config(text=stats_text)
+    
+    def on_search(self, event=None):
+        """Handle search input."""
+        search_term = self.entry_search.get().strip().lower()
+        
+        if not search_term:
+            # Show all items
+            current_tab_index = self.notebook.index(self.notebook.select())
+            current_key = self.tab_to_key[current_tab_index]
+            self.populate_tree(current_key)
+            return
+        
+        # Filter current tab
+        current_tab_index = self.notebook.index(self.notebook.select())
+        current_key = self.tab_to_key[current_tab_index]
+        tree = self.trees[current_key]
+        dict_info = self.dictionaries[current_key]
+        
+        # Clear tree
+        for item in tree.get_children():
+            tree.delete(item)
+        
+        # Add matching rows
+        for row in dict_info['data']:
+            # Search in all columns
+            if any(search_term in str(value).lower() for value in row.values()):
+                values = [row.get(col, '') for col in dict_info['columns']]
+                tree.insert('', 'end', values=values)
+    
+    def on_tab_changed(self, event=None):
+        """Handle tab change - refresh search."""
+        self.on_search()
+    
+    def clear_search(self):
+        """Clear search and show all items."""
+        self.entry_search.delete(0, tk.END)
+        for key in self.dictionaries:
+            self.populate_tree(key)
+
+
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
@@ -520,8 +907,16 @@ class SpellCheckerApp:
         self.last_result_paths = []
         self.skip_processed_var = tk.BooleanVar(value=True)
         self.html_only_var = tk.BooleanVar(value=False)
+        
+        # Perform migration from TXT to CSV if needed
+        migrate_txt_to_csv()
+        
+        # Create default CSV files if they don't exist
+        create_default_csv_files()
+        
         self.create_widgets()
 
+        # Legacy TXT file creation (for backward compatibility during transition)
         if not os.path.exists(RULES_FILE):
             with open(RULES_FILE, 'w', encoding='utf-8') as f:
                 f.write(DEFAULT_RULES)
@@ -667,8 +1062,8 @@ class SpellCheckerApp:
         self.log_message(f"Файл '{title}' оновлено.")
     
     def open_dictionary_manager(self):
-        """Open the unified dictionary manager window"""
-        manager = DictionaryManager(self.root)
+        """Open the table-based dictionary manager window"""
+        manager = TableDictionaryManager(self.root)
         self.root.wait_window(manager)
 
     def detect_default_columns(self, columns):
@@ -741,32 +1136,89 @@ class SpellCheckerApp:
             self.btn_open_result.config(state='disabled')
 
     def parse_rules(self):
+        """Parse translation rules from CSV or TXT format."""
         rules = {}
-        with open(RULES_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.split('#')[0].strip()
-                if '=' in line:
-                    ru, ua_list = line.split('=', 1)
-                    ua_stems = [ua.strip() for ua in ua_list.split(',')]
-                    rules[ru.strip()] = ua_stems
+        
+        # Try CSV first (new format)
+        if os.path.exists(RULES_FILE_CSV):
+            try:
+                with open(RULES_FILE_CSV, 'r', encoding='utf-8', newline='') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        ru_stem = row.get('російський_корінь', '').strip()
+                        ua_stems_str = row.get('українські_корені', '').strip()
+                        
+                        if ru_stem and ua_stems_str:
+                            ua_stems = [ua.strip() for ua in ua_stems_str.split(',')]
+                            rules[ru_stem] = ua_stems
+                return rules
+            except Exception as e:
+                print(f"Помилка читання CSV: {e}, перемикаємось на TXT")
+        
+        # Fallback to TXT format (legacy)
+        if os.path.exists(RULES_FILE):
+            with open(RULES_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.split('#')[0].strip()
+                    if '=' in line:
+                        ru, ua_list = line.split('=', 1)
+                        ua_stems = [ua.strip() for ua in ua_list.split(',')]
+                        rules[ru.strip()] = ua_stems
+        
         return rules
 
     def parse_ignores(self):
+        """Parse ignore rules from CSV or TXT format."""
         ignores = []
-        with open(IGNORE_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.split('#')[0].strip()
-                if line:
-                    ignores.append(line.lower())
+        
+        # Try CSV first (new format)
+        if os.path.exists(IGNORE_FILE_CSV):
+            try:
+                with open(IGNORE_FILE_CSV, 'r', encoding='utf-8', newline='') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        phrase = row.get('фраза', '').strip()
+                        if phrase:
+                            ignores.append(phrase.lower())
+                return ignores
+            except Exception as e:
+                print(f"Помилка читання CSV: {e}, перемикаємось на TXT")
+        
+        # Fallback to TXT format (legacy)
+        if os.path.exists(IGNORE_FILE):
+            with open(IGNORE_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.split('#')[0].strip()
+                    if line:
+                        ignores.append(line.lower())
+        
         return ignores
 
     def parse_blacklist(self):
+        """Parse blacklist from CSV or TXT format."""
         blacklist = []
-        with open(BLACKLIST_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.split('#')[0].strip()
-                if line:
-                    blacklist.append(line.lower())
+        
+        # Try CSV first (new format)
+        if os.path.exists(BLACKLIST_FILE_CSV):
+            try:
+                with open(BLACKLIST_FILE_CSV, 'r', encoding='utf-8', newline='') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        term = row.get('термін', '').strip()
+                        if term:
+                            blacklist.append(term.lower())
+                return blacklist
+            except Exception as e:
+                print(f"Помилка читання CSV: {e}, перемикаємось на TXT")
+        
+        # Fallback to TXT format (legacy)
+        if os.path.exists(BLACKLIST_FILE):
+            with open(BLACKLIST_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.split('#')[0].strip()
+                    if line:
+                        blacklist.append(line.lower())
+        
         return blacklist
 
     def normalize_text(self, text):
