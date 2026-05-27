@@ -565,6 +565,14 @@ class SpellCheckerApp:
             if label and value:
                 return {'type': 'plain_labeled_value', 'label': label, 'value': value, 'text': paragraph_text}
 
+        # Check for dash-prefixed list items (-, •, *, —, en-dash, em-dash)
+        # Supporting various bullet markers and Unicode variants
+        bullet_match = re.match(r'^[\-\u2022\*\u2013\u2014]\s+(.+)$', paragraph_text)
+        if bullet_match:
+            value = bullet_match.group(1).strip()
+            if value:
+                return {'type': 'list_item', 'value': value, 'text': paragraph_text}
+
         return {'type': 'text', 'text': paragraph_text}
 
     def detect_language(self, text):
@@ -641,6 +649,19 @@ class SpellCheckerApp:
                 item_signature = (label, value)
                 if item_signature not in current_list_signatures:
                     current_list_items.append(f"<li><strong>{label}:</strong> {value}</li>")
+                    current_list_signatures.add(item_signature)
+                continue
+
+            if item_type == 'list_item':
+                value = self.normalize_common_text_issues(item['value'])
+                
+                if self.contains_chinese(value):
+                    continue
+                
+                # Deduplication for plain list items (by value only)
+                item_signature = ('', value)  # Empty label for plain list items
+                if item_signature not in current_list_signatures:
+                    current_list_items.append(f"<li>{value}</li>")
                     current_list_signatures.add(item_signature)
                 continue
 
