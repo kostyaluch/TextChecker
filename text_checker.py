@@ -112,6 +112,246 @@ class TextEditor(Toplevel):
         self.destroy()
 
 
+class DictionaryManager(Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.transient(parent)
+        self.grab_set()
+        self.title("📚 Словники")
+        self.geometry("900x600")
+        self.parent = parent
+        
+        # Dictionary files configuration
+        self.dictionaries = {
+            'rules': {
+                'file': RULES_FILE,
+                'default': DEFAULT_RULES,
+                'title': '🔄 Помилки перекладу'
+            },
+            'ignores': {
+                'file': IGNORE_FILE,
+                'default': DEFAULT_IGNORES,
+                'title': '✓ Винятки'
+            },
+            'blacklist': {
+                'file': BLACKLIST_FILE,
+                'default': DEFAULT_BLACKLIST,
+                'title': '⛔ Чорний список'
+            }
+        }
+        
+        self.create_widgets()
+        self.load_all_dictionaries()
+        self.update_statistics()
+        
+    def create_widgets(self):
+        # Main frame
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Statistics frame at the top
+        stats_frame = ttk.LabelFrame(main_frame, text="📊 Статистика", padding=5)
+        stats_frame.pack(fill='x', pady=(0, 10))
+        
+        self.lbl_stats = ttk.Label(stats_frame, text="Завантаження...", font=('Segoe UI', 9))
+        self.lbl_stats.pack(anchor='w', padx=5)
+        
+        # Search frame
+        search_frame = ttk.Frame(main_frame)
+        search_frame.pack(fill='x', pady=(0, 10))
+        
+        ttk.Label(search_frame, text="🔍 Пошук:", font=('Segoe UI', 9, 'bold')).pack(side='left', padx=5)
+        self.entry_search = ttk.Entry(search_frame, width=50)
+        self.entry_search.pack(side='left', padx=5, fill='x', expand=True)
+        self.entry_search.bind('<KeyRelease>', self.on_search)
+        
+        self.btn_clear_search = ttk.Button(search_frame, text="Очистити", command=self.clear_search)
+        self.btn_clear_search.pack(side='left', padx=5)
+        
+        # Notebook (tabs)
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill='both', expand=True, pady=(0, 10))
+        
+        # Create tabs for each dictionary and maintain tab-to-key mapping
+        self.text_widgets = {}
+        self.tab_to_key = {}  # Map tab index to dictionary key
+        
+        for idx, (key, dict_info) in enumerate(self.dictionaries.items()):
+            tab_frame = ttk.Frame(self.notebook, padding=5)
+            self.notebook.add(tab_frame, text=dict_info['title'])
+            self.tab_to_key[idx] = key  # Store explicit mapping
+            
+            # Text widget with scrollbar
+            text_widget = tk.Text(tab_frame, wrap='word', font=('Consolas', 10), undo=True)
+            scrollbar = ttk.Scrollbar(tab_frame, orient='vertical', command=text_widget.yview)
+            text_widget.config(yscrollcommand=scrollbar.set)
+            
+            text_widget.pack(side='left', fill='both', expand=True)
+            scrollbar.pack(side='right', fill='y')
+            
+            self.text_widgets[key] = text_widget
+        
+        # Bottom button frame
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill='x')
+        
+        self.btn_save_all = ttk.Button(btn_frame, text="💾 Зберегти всі", command=self.save_all)
+        self.btn_save_all.pack(side='left', padx=5)
+        
+        self.btn_reload = ttk.Button(btn_frame, text="🔄 Перезавантажити", command=self.reload_all)
+        self.btn_reload.pack(side='left', padx=5)
+        
+        self.btn_close = ttk.Button(btn_frame, text="Закрити", command=self.destroy)
+        self.btn_close.pack(side='right', padx=5)
+        
+    def load_all_dictionaries(self):
+        """Load content from all dictionary files"""
+        for key, dict_info in self.dictionaries.items():
+            file_path = dict_info['file']
+            default_content = dict_info['default']
+            
+            # Create file with default content if it doesn't exist
+            if not os.path.exists(file_path):
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(default_content)
+            
+            # Load content
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            text_widget = self.text_widgets[key]
+            text_widget.delete('1.0', tk.END)
+            text_widget.insert('1.0', content)
+            
+    def save_all(self):
+        """Save all dictionaries to their respective files"""
+        try:
+            for key, dict_info in self.dictionaries.items():
+                file_path = dict_info['file']
+                text_widget = self.text_widgets[key]
+                content = text_widget.get('1.0', tk.END).strip()
+                
+                # Add newline at end if content exists
+                if content:
+                    content += '\n'
+                
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+            
+            self.update_statistics()
+            messagebox.showinfo("Успіх", "Всі словники успішно збережено!", parent=self)
+            
+            # Log to parent app if available
+            if hasattr(self.parent, 'log_message'):
+                self.parent.log_message("Словники оновлено через Менеджер словників")
+                
+        except Exception as e:
+            messagebox.showerror("Помилка", f"Не вдалося зберегти словники:\n{e}", parent=self)
+            
+    def reload_all(self):
+        """Reload all dictionaries from files"""
+        response = messagebox.askyesno(
+            "Підтвердження", 
+            "Перезавантажити всі словники з файлів? Незбережені зміни будуть втрачені.",
+            parent=self
+        )
+        if response:
+            self.load_all_dictionaries()
+            self.update_statistics()
+            self.clear_search()
+            
+    def count_entries(self, content):
+        """Count non-empty, non-comment lines in dictionary content"""
+        lines = content.strip().split('\n')
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                count += 1
+        return count
+        
+    def update_statistics(self):
+        """Update statistics display"""
+        stats = {}
+        total = 0
+        
+        for key, dict_info in self.dictionaries.items():
+            text_widget = self.text_widgets[key]
+            content = text_widget.get('1.0', tk.END)
+            count = self.count_entries(content)
+            stats[key] = count
+            total += count
+        
+        stats_text = (
+            f"Словник помилок: {stats['rules']} правил  |  "
+            f"Словник винятків: {stats['ignores']} фраз  |  "
+            f"Чорний список: {stats['blacklist']} термінів  |  "
+            f"Всього: {total} записів"
+        )
+        self.lbl_stats.config(text=stats_text)
+        
+    def on_search(self, event=None):
+        """Handle search input"""
+        search_term = self.entry_search.get().strip().lower()
+        
+        if not search_term:
+            self.clear_highlights()
+            return
+        
+        # Clear previous highlights
+        self.clear_highlights()
+        
+        # Search in current tab using explicit mapping
+        current_tab_index = self.notebook.index(self.notebook.select())
+        current_key = self.tab_to_key[current_tab_index]
+        text_widget = self.text_widgets[current_key]
+        
+        # Highlight matches
+        self.highlight_matches(text_widget, search_term)
+        
+    def highlight_matches(self, text_widget, search_term):
+        """Highlight search matches in text widget"""
+        # Configure tag for highlighting
+        text_widget.tag_configure('search_highlight', background='yellow', foreground='black')
+        
+        # Remove previous highlights
+        text_widget.tag_remove('search_highlight', '1.0', tk.END)
+        
+        if not search_term:
+            return
+        
+        # Search and highlight
+        start_pos = '1.0'
+        first_match = None
+        
+        while True:
+            start_pos = text_widget.search(search_term, start_pos, tk.END, nocase=True)
+            if not start_pos:
+                break
+            
+            # Store the first match for scrolling
+            if first_match is None:
+                first_match = start_pos
+            
+            end_pos = f"{start_pos}+{len(search_term)}c"
+            text_widget.tag_add('search_highlight', start_pos, end_pos)
+            start_pos = end_pos
+        
+        # Scroll to first match if found
+        if first_match:
+            text_widget.see(first_match)
+                
+    def clear_highlights(self):
+        """Clear all search highlights"""
+        for text_widget in self.text_widgets.values():
+            text_widget.tag_remove('search_highlight', '1.0', tk.END)
+            
+    def clear_search(self):
+        """Clear search entry and highlights"""
+        self.entry_search.delete(0, tk.END)
+        self.clear_highlights()
+
+
 class SpellCheckerApp:
     def __init__(self, root):
         self.root = root
@@ -241,14 +481,8 @@ class SpellCheckerApp:
         self.btn_open_result = ttk.Button(control_frame, text="📂 Відкрити результат", command=self.open_results, state='disabled')
         self.btn_open_result.pack(side='left', padx=5)
 
-        self.btn_edit_rules = ttk.Button(control_frame, text="✎ Словник помилок", command=lambda: self.open_editor("Словник помилок", RULES_FILE, DEFAULT_RULES))
-        self.btn_edit_rules.pack(side='left', padx=5)
-
-        self.btn_edit_ignores = ttk.Button(control_frame, text="🚫 Словник винятків", command=lambda: self.open_editor("Словник винятків", IGNORE_FILE, DEFAULT_IGNORES))
-        self.btn_edit_ignores.pack(side='left', padx=5)
-
-        self.btn_edit_blacklist = ttk.Button(control_frame, text="⛔ Чорний список", command=lambda: self.open_editor("Чорний список термінів", BLACKLIST_FILE, DEFAULT_BLACKLIST))
-        self.btn_edit_blacklist.pack(side='left', padx=5)
+        self.btn_dictionary_manager = ttk.Button(control_frame, text="📚 Словники", command=self.open_dictionary_manager)
+        self.btn_dictionary_manager.pack(side='left', padx=5)
 
         progress_frame = ttk.Frame(self.root, padding="5")
         progress_frame.pack(fill='x', padx=10, pady=5)
@@ -277,6 +511,11 @@ class SpellCheckerApp:
         editor = TextEditor(self.root, title, file_path, default_content)
         self.root.wait_window(editor)
         self.log_message(f"Файл '{title}' оновлено.")
+    
+    def open_dictionary_manager(self):
+        """Open the unified dictionary manager window"""
+        manager = DictionaryManager(self.root)
+        self.root.wait_window(manager)
 
     def detect_default_columns(self, columns):
         normalized = {col: str(col).strip().lower() for col in columns}
@@ -337,9 +576,7 @@ class SpellCheckerApp:
     def set_ui_state(self, is_running):
         state = 'disabled' if is_running else 'normal'
         self.btn_select_file.config(state=state)
-        self.btn_edit_rules.config(state=state)
-        self.btn_edit_ignores.config(state=state)
-        self.btn_edit_blacklist.config(state=state)
+        self.btn_dictionary_manager.config(state=state)
         start_state = state if self.file_paths else 'disabled'
         self.btn_start_analysis.config(state=start_state)
         self.chk_skip_processed.config(state=state)
