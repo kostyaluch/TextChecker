@@ -560,8 +560,8 @@ class SpellCheckerApp:
 
         # Check for dash-prefixed items first, strip the bullet marker, then re-classify
         # Supporting various bullet markers: -, •, *, —, en-dash (\u2013), em-dash (\u2014)
-        # Note: hyphen placed at end of character class to avoid interpretation as range operator
-        bullet_match = re.match(r'^[\u2022\*\u2013\u2014\-]\s+(.+)$', paragraph_text)
+        # Note: hyphen escaped explicitly for clarity
+        bullet_match = re.match(r'^[\u2022\*\u2013\u2014\\\-]\s+(.+)$', paragraph_text)
         if bullet_match:
             # Strip the bullet marker and get the content
             content_after_bullet = bullet_match.group(1).strip()
