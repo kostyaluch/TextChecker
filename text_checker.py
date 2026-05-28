@@ -22,7 +22,7 @@ BLACKLIST_FILE_CSV = 'blacklist_terms.csv'
 RULES_FILE = 'translation_rules.txt'
 IGNORE_FILE = 'ignore_rules.txt'
 BLACKLIST_FILE = 'blacklist_terms.txt'
-APP_VERSION = "v17"  # Cyrillic keyboard shortcuts; removed Exceptions tab; Action checkbox; cleanup-only mode
+APP_VERSION = "v18"  # Restored processing mode section; blacklist action as radio buttons (Видаляти/Повідомляти)
 MIN_SHORT_DESC_WORDS = 2
 MIN_SHORT_DESC_LENGTH = 24
 DECIMAL_MAX_INT_DIGITS = 4
@@ -567,16 +567,31 @@ class RowEditDialog(Toplevel):
             label = ttk.Label(main_frame, text=f"{col}:", font=('Segoe UI', 10, 'bold'))
             label.grid(row=idx, column=0, sticky='w', pady=5, padx=5)
             
-            # Чекбокс для поля "дія" в чорному списку
+            # Радіокнопки для поля "дія" в чорному списку
             if col == 'дія' and dictionary_key == 'blacklist':
-                var = tk.BooleanVar(value=False)
-                checkbox = ttk.Checkbutton(main_frame, text="Активно", variable=var)
-                checkbox.grid(row=idx, column=1, sticky='w', pady=5, padx=5)
+                var = tk.StringVar(value="Видалити")
+                
+                # Створюємо фрейм для радіокнопок
+                radio_frame = ttk.Frame(main_frame)
+                radio_frame.grid(row=idx, column=1, sticky='w', pady=5, padx=5)
+                
+                radio1 = ttk.Radiobutton(radio_frame, text="Видаляти", variable=var, value="Видалити")
+                radio1.pack(side='left', padx=(0, 15))
+                
+                radio2 = ttk.Radiobutton(radio_frame, text="Повідомляти", variable=var, value="Повідомляти")
+                radio2.pack(side='left')
+                
                 self.entries[col] = var
                 
                 if values and col in values:
-                    # Інтерпретуємо будь-яке значення як True, якщо воно не порожнє
-                    var.set(bool(values[col] and values[col].strip()))
+                    # Інтерпретуємо значення: "Видалити", "Видаляти", "✓" або будь-яке непорожнє → "Видалити"
+                    # "Повідомляти", "Підсвітити" → "Повідомляти"
+                    # Порожнє → "Повідомляти"
+                    val = values[col].strip()
+                    if val in ["Видалити", "Видаляти", "✓"] or (val and val not in ["Повідомляти", "Підсвітити"]):
+                        var.set("Видалити")
+                    else:
+                        var.set("Повідомляти")
             # Use Text widget for multi-line support on larger fields
             elif col in ['коментар', 'виключення', 'українські_корені']:
                 text_widget = tk.Text(main_frame, height=3, wrap='word', font=('Consolas', 10))
@@ -650,7 +665,10 @@ class RowEditDialog(Toplevel):
         """Save the edited values."""
         self.result = {}
         for col, widget in self.entries.items():
-            if isinstance(widget, tk.BooleanVar):
+            if isinstance(widget, tk.StringVar):
+                # Для радіокнопок зберігаємо значення напряму
+                self.result[col] = widget.get()
+            elif isinstance(widget, tk.BooleanVar):
                 # Для чекбоксу зберігаємо "✓" якщо увімкнено, інакше порожній рядок
                 self.result[col] = "✓" if widget.get() else ""
             elif isinstance(widget, tk.Text):
@@ -1036,9 +1054,9 @@ class SpellCheckerApp:
 
         self.file_paths = []
         self.last_result_paths = []
-        # Режим завжди "Тільки очищення HTML" (без перевірки зі словником)
+        # Режим обробки: користувач може вибрати "Тільки очищення HTML"
         self.skip_processed_var = tk.BooleanVar(value=False)  # Не використовується
-        self.html_only_var = tk.BooleanVar(value=True)  # Завжди True
+        self.html_only_var = tk.BooleanVar(value=False)  # За замовчуванням вимкнено
         
         # Perform migration from TXT to CSV if needed
         migrate_txt_to_csv()
@@ -1136,10 +1154,18 @@ class SpellCheckerApp:
         self.combo_ua = ttk.Combobox(columns_row, state="disabled", width=25)
         self.combo_ua.pack(side='left', padx=5)
 
-        # Режим обробки: тільки очищення HTML (завжди увімкнено)
-        # options_frame видалено згідно з вимогами
+        # Секція режимів обробки
+        options_frame = ttk.LabelFrame(self.root, text="2. Режим обробки")
+        options_frame.pack(fill='x', padx=10, pady=5)
 
-        control_frame = ttk.LabelFrame(self.root, text="2. Керування та словники")
+        self.chk_html_only = ttk.Checkbutton(
+            options_frame,
+            text="Тільки очищення HTML (без перевірки правил перекладу)",
+            variable=self.html_only_var
+        )
+        self.chk_html_only.pack(side='left', padx=5)
+
+        control_frame = ttk.LabelFrame(self.root, text="3. Керування та словники")
         control_frame.pack(fill='x', padx=10, pady=5)
 
         self.btn_start_analysis = ttk.Button(control_frame, text="▶ Почати перевірку", command=self.start_analysis, state='disabled')
