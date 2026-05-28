@@ -284,11 +284,6 @@ class DictionaryManager(Toplevel):
                 'default': DEFAULT_RULES,
                 'title': '🔄 Помилки перекладу'
             },
-            'ignores': {
-                'file': IGNORE_FILE,
-                'default': DEFAULT_IGNORES,
-                'title': '✓ Винятки'
-            },
             'blacklist': {
                 'file': BLACKLIST_FILE,
                 'default': DEFAULT_BLACKLIST,
@@ -299,6 +294,48 @@ class DictionaryManager(Toplevel):
         self.create_widgets()
         self.load_all_dictionaries()
         self.update_statistics()
+        self.bind_cyrillic_shortcuts()
+    
+    def bind_cyrillic_shortcuts(self):
+        """Прив'язка кириличних клавіатурних скорочень"""
+        self.bind('<Control-Key-с>', lambda e: self.handle_copy(e))
+        self.bind('<Control-Key-С>', lambda e: self.handle_copy(e))
+        self.bind('<Control-Key-м>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-М>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-в>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-В>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-ч>', lambda e: self.handle_cut(e))
+        self.bind('<Control-Key-Ч>', lambda e: self.handle_cut(e))
+    
+    def handle_copy(self, event):
+        """Обробка копіювання"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Copy>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_paste(self, event):
+        """Обробка вставки"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'insert'):
+                widget.event_generate('<<Paste>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_cut(self, event):
+        """Обробка вирізання"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Cut>>')
+        except:
+            pass
+        return 'break'
         
     def create_widgets(self):
         # Main frame
@@ -440,7 +477,6 @@ class DictionaryManager(Toplevel):
         
         stats_text = (
             f"Словник помилок: {stats['rules']} правил  |  "
-            f"Словник винятків: {stats['ignores']} фраз  |  "
             f"Чорний список: {stats['blacklist']} термінів  |  "
             f"Всього: {total} записів"
         )
@@ -511,7 +547,7 @@ class DictionaryManager(Toplevel):
 class RowEditDialog(Toplevel):
     """Dialog for adding/editing dictionary rows."""
     
-    def __init__(self, parent, columns, values=None, title="Редагувати запис"):
+    def __init__(self, parent, columns, values=None, title="Редагувати запис", dictionary_key=None):
         super().__init__(parent)
         self.transient(parent)
         self.grab_set()
@@ -519,6 +555,7 @@ class RowEditDialog(Toplevel):
         self.geometry("700x400")
         self.result = None
         self.columns = columns
+        self.dictionary_key = dictionary_key  # Для визначення типу словника
         
         # Create main frame
         main_frame = ttk.Frame(self, padding=10)
@@ -530,8 +567,18 @@ class RowEditDialog(Toplevel):
             label = ttk.Label(main_frame, text=f"{col}:", font=('Segoe UI', 10, 'bold'))
             label.grid(row=idx, column=0, sticky='w', pady=5, padx=5)
             
+            # Чекбокс для поля "дія" в чорному списку
+            if col == 'дія' and dictionary_key == 'blacklist':
+                var = tk.BooleanVar(value=False)
+                checkbox = ttk.Checkbutton(main_frame, text="Активно", variable=var)
+                checkbox.grid(row=idx, column=1, sticky='w', pady=5, padx=5)
+                self.entries[col] = var
+                
+                if values and col in values:
+                    # Інтерпретуємо будь-яке значення як True, якщо воно не порожнє
+                    var.set(bool(values[col] and values[col].strip()))
             # Use Text widget for multi-line support on larger fields
-            if col in ['коментар', 'виключення', 'українські_корені']:
+            elif col in ['коментар', 'виключення', 'українські_корені']:
                 text_widget = tk.Text(main_frame, height=3, wrap='word', font=('Consolas', 10))
                 text_widget.grid(row=idx, column=1, sticky='ew', pady=5, padx=5)
                 self.entries[col] = text_widget
@@ -554,12 +601,59 @@ class RowEditDialog(Toplevel):
         
         ttk.Button(btn_frame, text="Зберегти", command=self.save).pack(side='right', padx=5)
         ttk.Button(btn_frame, text="Скасувати", command=self.destroy).pack(side='right')
+        
+        # Додаємо підтримку кириличних скорочень
+        self.bind_cyrillic_shortcuts()
+    
+    def bind_cyrillic_shortcuts(self):
+        """Прив'язка кириличних клавіатурних скорочень"""
+        self.bind('<Control-Key-с>', lambda e: self.handle_copy(e))
+        self.bind('<Control-Key-С>', lambda e: self.handle_copy(e))
+        self.bind('<Control-Key-м>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-М>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-в>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-В>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-ч>', lambda e: self.handle_cut(e))
+        self.bind('<Control-Key-Ч>', lambda e: self.handle_cut(e))
+    
+    def handle_copy(self, event):
+        """Обробка копіювання"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Copy>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_paste(self, event):
+        """Обробка вставки"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'insert'):
+                widget.event_generate('<<Paste>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_cut(self, event):
+        """Обробка вирізання"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Cut>>')
+        except:
+            pass
+        return 'break'
     
     def save(self):
         """Save the edited values."""
         self.result = {}
         for col, widget in self.entries.items():
-            if isinstance(widget, tk.Text):
+            if isinstance(widget, tk.BooleanVar):
+                # Для чекбоксу зберігаємо "✓" якщо увімкнено, інакше порожній рядок
+                self.result[col] = "✓" if widget.get() else ""
+            elif isinstance(widget, tk.Text):
                 self.result[col] = widget.get('1.0', tk.END).strip()
             else:
                 self.result[col] = widget.get().strip()
@@ -585,12 +679,6 @@ class TableDictionaryManager(Toplevel):
                 'title': '🔄 Помилки перекладу',
                 'data': []
             },
-            'ignores': {
-                'file': IGNORE_FILE_CSV,
-                'columns': DEFAULT_IGNORES_CSV_HEADER,
-                'title': '✓ Винятки',
-                'data': []
-            },
             'blacklist': {
                 'file': BLACKLIST_FILE_CSV,
                 'columns': DEFAULT_BLACKLIST_CSV_HEADER,
@@ -602,6 +690,48 @@ class TableDictionaryManager(Toplevel):
         self.create_widgets()
         self.load_all_dictionaries()
         self.update_statistics()
+        self.bind_cyrillic_shortcuts()
+    
+    def bind_cyrillic_shortcuts(self):
+        """Прив'язка кириличних клавіатурних скорочень"""
+        self.bind('<Control-Key-с>', lambda e: self.handle_copy(e))
+        self.bind('<Control-Key-С>', lambda e: self.handle_copy(e))
+        self.bind('<Control-Key-м>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-М>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-в>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-В>', lambda e: self.handle_paste(e))
+        self.bind('<Control-Key-ч>', lambda e: self.handle_cut(e))
+        self.bind('<Control-Key-Ч>', lambda e: self.handle_cut(e))
+    
+    def handle_copy(self, event):
+        """Обробка копіювання"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Copy>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_paste(self, event):
+        """Обробка вставки"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'insert'):
+                widget.event_generate('<<Paste>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_cut(self, event):
+        """Обробка вирізання"""
+        try:
+            widget = self.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Cut>>')
+        except:
+            pass
+        return 'break'
         
     def create_widgets(self):
         """Create the table-based UI."""
@@ -738,7 +868,7 @@ class TableDictionaryManager(Toplevel):
         dict_info = self.dictionaries[key]
         columns = dict_info['columns']
         
-        dialog = RowEditDialog(self, columns, title=f"Додати запис - {dict_info['title']}")
+        dialog = RowEditDialog(self, columns, title=f"Додати запис - {dict_info['title']}", dictionary_key=key)
         self.wait_window(dialog)
         
         if dialog.result:
@@ -761,7 +891,7 @@ class TableDictionaryManager(Toplevel):
         current_values = dict_info['data'][idx]
         
         dialog = RowEditDialog(self, dict_info['columns'], current_values, 
-                               title=f"Редагувати запис - {dict_info['title']}")
+                               title=f"Редагувати запис - {dict_info['title']}", dictionary_key=key)
         self.wait_window(dialog)
         
         if dialog.result:
@@ -850,7 +980,6 @@ class TableDictionaryManager(Toplevel):
         
         stats_text = (
             f"Словник помилок: {stats['rules']} правил  |  "
-            f"Словник винятків: {stats['ignores']} фраз  |  "
             f"Чорний список: {stats['blacklist']} термінів  |  "
             f"Всього: {total} записів"
         )
@@ -907,8 +1036,9 @@ class SpellCheckerApp:
 
         self.file_paths = []
         self.last_result_paths = []
-        self.skip_processed_var = tk.BooleanVar(value=True)
-        self.html_only_var = tk.BooleanVar(value=False)
+        # Режим завжди "Тільки очищення HTML" (без перевірки зі словником)
+        self.skip_processed_var = tk.BooleanVar(value=False)  # Не використовується
+        self.html_only_var = tk.BooleanVar(value=True)  # Завжди True
         
         # Perform migration from TXT to CSV if needed
         migrate_txt_to_csv()
@@ -1006,24 +1136,10 @@ class SpellCheckerApp:
         self.combo_ua = ttk.Combobox(columns_row, state="disabled", width=25)
         self.combo_ua.pack(side='left', padx=5)
 
-        options_frame = ttk.LabelFrame(self.root, text="2. Режими обробки")
-        options_frame.pack(fill='x', padx=10, pady=5)
+        # Режим обробки: тільки очищення HTML (завжди увімкнено)
+        # options_frame видалено згідно з вимогами
 
-        self.chk_skip_processed = ttk.Checkbutton(
-            options_frame,
-            text="Пропускати рядки, де _checked вже заповнено",
-            variable=self.skip_processed_var
-        )
-        self.chk_skip_processed.pack(side='left', padx=5)
-
-        self.chk_html_only = ttk.Checkbutton(
-            options_frame,
-            text="Тільки очищення HTML (без перевірки правил перекладу)",
-            variable=self.html_only_var
-        )
-        self.chk_html_only.pack(side='left', padx=12)
-
-        control_frame = ttk.LabelFrame(self.root, text="3. Керування та словники")
+        control_frame = ttk.LabelFrame(self.root, text="2. Керування та словники")
         control_frame.pack(fill='x', padx=10, pady=5)
 
         self.btn_start_analysis = ttk.Button(control_frame, text="▶ Почати перевірку", command=self.start_analysis, state='disabled')
@@ -1050,6 +1166,61 @@ class SpellCheckerApp:
         log_scroll = ttk.Scrollbar(self.txt_log, orient='vertical', command=self.txt_log.yview)
         self.txt_log['yscrollcommand'] = log_scroll.set
         log_scroll.pack(side='right', fill='y')
+        
+        # Додаємо підтримку кириличних клавіш для копіювання/вставки
+        self.bind_cyrillic_shortcuts()
+    
+    def bind_cyrillic_shortcuts(self):
+        """Прив'язка кириличних клавіатурних скорочень для копіювання/вставки"""
+        # Ctrl+С (кирилична С) = копіювати
+        self.root.bind('<Control-Key-с>', lambda e: self.handle_copy(e))
+        self.root.bind('<Control-Key-С>', lambda e: self.handle_copy(e))
+        
+        # Ctrl+М (кирилична М) = вставити (російська В на тій же клавіші що і V)
+        self.root.bind('<Control-Key-м>', lambda e: self.handle_paste(e))
+        self.root.bind('<Control-Key-М>', lambda e: self.handle_paste(e))
+        
+        # Також Ctrl+В (кирилична В) = вставити
+        self.root.bind('<Control-Key-в>', lambda e: self.handle_paste(e))
+        self.root.bind('<Control-Key-В>', lambda e: self.handle_paste(e))
+        
+        # Ctrl+Ч (кирилична Ч на клавіші X) = вирізати
+        self.root.bind('<Control-Key-ч>', lambda e: self.handle_cut(e))
+        self.root.bind('<Control-Key-Ч>', lambda e: self.handle_cut(e))
+        
+        # Ctrl+Ш (кирилична Ш на клавіші I для Insert) - вставити
+        self.root.bind('<Control-Key-ш>', lambda e: self.handle_paste(e))
+        self.root.bind('<Control-Key-Ш>', lambda e: self.handle_paste(e))
+    
+    def handle_copy(self, event):
+        """Обробка копіювання з кириличної розкладки"""
+        try:
+            widget = self.root.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Copy>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_paste(self, event):
+        """Обробка вставки з кириличної розкладки"""
+        try:
+            widget = self.root.focus_get()
+            if hasattr(widget, 'insert'):
+                widget.event_generate('<<Paste>>')
+        except:
+            pass
+        return 'break'
+    
+    def handle_cut(self, event):
+        """Обробка вирізання з кириличної розкладки"""
+        try:
+            widget = self.root.focus_get()
+            if hasattr(widget, 'selection_get'):
+                widget.event_generate('<<Cut>>')
+        except:
+            pass
+        return 'break'
 
     def log_message(self, message):
         self.txt_log.config(state='normal')
