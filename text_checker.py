@@ -204,6 +204,8 @@ def create_default_csv_files():
             writer.writeheader()
             writer.writerow({
                 'термін': 'www.',
+                'виключення': '',
+                'дія': 'Видалити',
                 'категорія': 'URL',
                 'коментар': 'Заборонені веб-адреси в описах'
             })
